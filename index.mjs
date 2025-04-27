@@ -84,7 +84,13 @@ const calculateMetrics = async (pr) => {
     fetchPRReviews(pr.number),
   ]);
 
-  // Combine comments and reviews, filtering for team member activity
+  // Get review status from all reviews
+  const isApproved = reviews.some((review) => review.state === "APPROVED");
+  const hasChangesRequested = reviews.some(
+    (review) => review.state === "CHANGES_REQUESTED"
+  );
+
+  // Calculate staleness using existing logic
   const teamActivity = [
     ...comments.map((c) => ({
       date: new Date(c.created_at),
@@ -101,13 +107,29 @@ const calculateMetrics = async (pr) => {
     )
     .sort((a, b) => b.date - a.date);
 
-  // Calculate staleness (days since last team member activity)
   const staleness =
     teamActivity.length > 0
       ? Math.ceil(Math.abs(now - teamActivity[0].date) / (1000 * 60 * 60 * 24))
-      : age; // If no team activity, staleness equals age
+      : age;
 
-  return { age, staleness };
+  return {
+    age,
+    staleness,
+    isApproved,
+    hasChangesRequested,
+  };
+};
+
+const PR_STATUS = {
+  NEEDS_REVIEW: { priority: 0, label: "👀 Needs review" },
+  CHANGES_REQUESTED: { priority: 1, label: "🔄 Changes requested" },
+  APPROVED: { priority: 2, label: "✅ Approved" },
+};
+
+const getPRStatus = (pr) => {
+  if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
+  if (pr.isApproved) return PR_STATUS.APPROVED;
+  return PR_STATUS.NEEDS_REVIEW;
 };
 
 const printPullRequests = async (pullRequests) => {
@@ -116,27 +138,28 @@ const printPullRequests = async (pullRequests) => {
     return;
   }
 
-  console.log("Open Pull Requests from Team Members:\n");
-  console.log(
-    "| PR Title | Author | Age (days) | Staleness (days) | Status | URL |"
-  );
-  console.log("|:---|:---|:---|:---|:---|:---|");
+  console.log("📊 *Open Pull Requests from Team Members*\n");
 
   // Process all PRs in parallel
   const prsWithMetrics = await Promise.all(
     pullRequests.map(async (pr) => {
       const metrics = await calculateMetrics(pr);
-      const status = pr.draft ? "📝 Draft" : "🔍 In Review";
-      return { ...pr, ...metrics, status };
+      return { ...pr, ...metrics };
     })
   );
 
-  // Sort by staleness (most stale first)
+  // Sort by status priority first, then by staleness
   prsWithMetrics
-    .sort((a, b) => b.staleness - a.staleness)
+    .sort((a, b) => {
+      const statusDiff = getPRStatus(a).priority - getPRStatus(b).priority;
+      if (statusDiff !== 0) return statusDiff;
+      return b.staleness - a.staleness;
+    })
     .forEach((pr) => {
       console.log(
-        `| ${pr.title} | ${pr.user.login} | ${pr.age} | ${pr.staleness} | ${pr.status} | ${pr.html_url} |`
+        `*${pr.title.trim()}* (${getPRStatus(pr).label})\n` +
+          `by ${pr.user.login} • Age: ${pr.age}d • Stale: ${pr.staleness}d\n` +
+          `${pr.html_url}\n`
       );
     });
 };
