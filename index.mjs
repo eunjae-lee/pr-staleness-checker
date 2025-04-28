@@ -7,6 +7,7 @@ dotenv.config();
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const REPO_OWNER = "calcom";
 const REPO_NAME = "cal.com";
+const TEAM_NAME = process.env.TEAM_NAME;
 
 // Get team members from environment variables
 const TEAM_MEMBERS =
@@ -138,7 +139,7 @@ const printPullRequests = async (pullRequests) => {
     return;
   }
 
-  console.log("📊 *Open Pull Requests from Team Members*\n");
+  console.log(`📊 *Open Pull Requests from ${TEAM_NAME} Team Members*\n`);
 
   // Process all PRs in parallel
   const prsWithMetrics = await Promise.all(
@@ -148,20 +149,33 @@ const printPullRequests = async (pullRequests) => {
     })
   );
 
-  // Sort by status priority first, then by staleness
-  prsWithMetrics
-    .sort((a, b) => {
-      const statusDiff = getPRStatus(a).priority - getPRStatus(b).priority;
-      if (statusDiff !== 0) return statusDiff;
-      return b.staleness - a.staleness;
-    })
-    .forEach((pr) => {
-      console.log(
-        `*${pr.title.trim()}* (${getPRStatus(pr).label})\n` +
-          `by ${pr.user.login} • Age: ${pr.age}d • Stale: ${pr.staleness}d\n` +
-          `${pr.html_url}\n`
-      );
-    });
+  // Group PRs by status
+  const groupedPRs = {
+    [PR_STATUS.NEEDS_REVIEW.label]: [],
+    [PR_STATUS.CHANGES_REQUESTED.label]: [],
+    [PR_STATUS.APPROVED.label]: [],
+  };
+
+  prsWithMetrics.forEach((pr) => {
+    const status = getPRStatus(pr);
+    groupedPRs[status.label].push(pr);
+  });
+
+  // Print each group, sorted by staleness within group
+  Object.entries(groupedPRs).forEach(([statusLabel, prs]) => {
+    if (prs.length === 0) return;
+
+    console.log(`*${statusLabel}*`);
+    prs
+      .sort((a, b) => b.staleness - a.staleness)
+      .forEach((pr) => {
+        console.log(
+          `• *${pr.title.trim()}*\n` +
+            `  by ${pr.user.login} • Age: ${pr.age}d • Stale: ${pr.staleness}d\n` +
+            `  ${pr.html_url}\n`
+        );
+      });
+  });
 };
 
 const main = async () => {
