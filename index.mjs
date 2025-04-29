@@ -3,15 +3,16 @@ import dotenv from "dotenv";
 
 // Load environment variables from .env file
 dotenv.config();
+const inputData = process.env;
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_TOKEN = inputData.GITHUB_TOKEN;
 const REPO_OWNER = "calcom";
 const REPO_NAME = "cal.com";
-const TEAM_NAME = process.env.TEAM_NAME;
+const TEAM_NAME = inputData.TEAM_NAME;
 
 // Get team members from environment variables
 const TEAM_MEMBERS =
-  process.env.TEAM_MEMBERS?.split(",").map((username) => username.trim()) || [];
+  inputData.TEAM_MEMBERS?.split(",").map((username) => username.trim()) || [];
 
 if (TEAM_MEMBERS.length === 0) {
   console.error("No team members specified in .env file");
@@ -134,12 +135,13 @@ const getPRStatus = (pr) => {
 };
 
 const printPullRequests = async (pullRequests) => {
+  let output = "";
+
   if (pullRequests.length === 0) {
-    console.log("No open pull requests from team members.");
-    return;
+    return "No open pull requests from team members.";
   }
 
-  console.log(`📊 *Open Pull Requests from ${TEAM_NAME} Team Members*\n`);
+  output += `📊 *Open Pull Requests from ${TEAM_NAME} Team Members*\n\n`;
 
   // Process all PRs in parallel
   const prsWithMetrics = await Promise.all(
@@ -165,26 +167,28 @@ const printPullRequests = async (pullRequests) => {
   Object.entries(groupedPRs).forEach(([statusLabel, prs]) => {
     if (prs.length === 0) return;
 
-    console.log(`*${statusLabel}*`);
+    output += `*${statusLabel}*\n`;
     prs
       .sort((a, b) => b.staleness - a.staleness)
       .forEach((pr) => {
-        console.log(
+        output +=
           `• *${pr.title.trim()}*\n` +
-            `  by ${pr.user.login} • Age: ${pr.age}d • Stale: ${pr.staleness}d\n` +
-            `  ${pr.html_url}\n`
-        );
+          `  by ${pr.user.login} • Age: ${pr.age}d • Stale: ${pr.staleness}d\n` +
+          `  ${pr.html_url}\n\n`;
       });
   });
+
+  return output;
 };
 
 const main = async () => {
   try {
     const pullRequests = await fetchPullRequests();
-    await printPullRequests(pullRequests);
+    const output = await printPullRequests(pullRequests);
+    return output;
   } catch (error) {
-    console.error("Error:", error.message);
+    return `Error: ${error.message}`;
   }
 };
 
-main();
+main().then((output) => console.log(output));
