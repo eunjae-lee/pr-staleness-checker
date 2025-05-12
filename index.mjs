@@ -9,6 +9,9 @@ const GITHUB_TOKEN = inputData.GITHUB_TOKEN;
 const REPO_OWNER = "calcom";
 const REPO_NAME = "cal.com";
 const TEAM_NAME = inputData.TEAM_NAME;
+const INCLUDE_DEVIN = inputData.INCLUDE_DEVIN === "true";
+
+const DEVIN_LOGIN = "devin-ai-integration[bot]";
 
 // Get team members from environment variables
 const TEAM_MEMBERS =
@@ -34,12 +37,26 @@ const fetchPullRequests = async () => {
 
   const pullRequests = await response.json();
 
-  // Filter PRs to only show:
-  // 1. PRs from team members
-  // 2. Not in draft state
-  return pullRequests.filter(
-    (pr) => TEAM_MEMBERS.includes(pr.user.login) && !pr.draft
-  );
+  // Filter PRs with the new conditions:
+  // 1. PRs from team members (not in draft)
+  // 2. OR PRs from Devin (if enabled) where at least one assignee is a team member
+  return pullRequests.filter((pr) => {
+    // Skip draft PRs
+    if (pr.draft) return false;
+
+    // If PR is from a team member, include it
+    if (TEAM_MEMBERS.includes(pr.user.login)) return true;
+
+    // If Devin is included and PR is from Devin, check assignees
+    if (INCLUDE_DEVIN && pr.user.login === DEVIN_LOGIN) {
+      // Check if any assignee is a team member
+      return pr.assignees.some((assignee) =>
+        TEAM_MEMBERS.includes(assignee.login)
+      );
+    }
+
+    return false;
+  });
 };
 
 const fetchPRComments = async (prNumber) => {
