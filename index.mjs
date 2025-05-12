@@ -208,4 +208,7 @@ const main = async () => {
   }
 };
 
-main().then((output) => console.log(output));
+const output = await main();
+console.log(output);
+
+// return { message: output };
