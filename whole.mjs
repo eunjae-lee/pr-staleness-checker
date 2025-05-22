@@ -113,23 +113,45 @@ const calculateMetrics = async (pr) => {
 };
 
 const PR_STATUS = {
-  NEEDS_FOUNDATION_REVIEW: { priority: 0, label: "⚡ Needs Foundation Review" },
-  HIGH_PRIORITY: { priority: 1, label: "🚨 High Priority" },
-  NEEDS_REVIEW: { priority: 2, label: "👀 Needs review" },
-  CHANGES_REQUESTED: { priority: 3, label: "🔄 Changes requested" },
-  APPROVED: { priority: 4, label: "✅ Approved" },
+  HIGH_PRIORITY: { priority: 0, label: "🚨 High Priority" },
+  NEEDS_FOUNDATION_REVIEW: { priority: 1, label: "⚡ Needs Foundation Review" },
+  NEEDS_PLATFORM_REVIEW: { priority: 2, label: "🔧 Needs Platform Review" },
+  NEEDS_CONSUMER_REVIEW: { priority: 3, label: "👥 Needs Consumer Review" },
+  NEEDS_REVIEW: { priority: 4, label: "👀 Needs Review" },
+  CHANGES_REQUESTED: { priority: 5, label: "🔄 Changes requested" },
+  APPROVED: { priority: 6, label: "✅ Approved" },
+};
+
+const TEAMS = {
+  foundation: "foundation",
+  platform: "platform",
+  consumer: "consumer",
 };
 
 const getPRStatus = (pr) => {
-  // Check if PR needs Foundation team review
-  if (pr.requested_teams?.some((team) => team.slug === "foundation")) {
-    return PR_STATUS.NEEDS_FOUNDATION_REVIEW;
-  }
-
-  // Check for priority labels
+  // Check for priority labels first
   if (pr.labels.some((label) => PRIORITY_LABELS.includes(label.name))) {
     return PR_STATUS.HIGH_PRIORITY;
   }
+
+  // Check for team reviews based on CODEOWNERS
+  const requestedTeams = pr.requested_teams?.map((team) => team.slug) || [];
+
+  // Check for single-team reviews
+  const isOnlyTeamRequested = (team) => {
+    const otherTeams = Object.values(TEAMS).filter((t) => t !== team);
+    return (
+      requestedTeams.includes(team) &&
+      !otherTeams.some((t) => requestedTeams.includes(t))
+    );
+  };
+
+  if (isOnlyTeamRequested(TEAMS.foundation))
+    return PR_STATUS.NEEDS_FOUNDATION_REVIEW;
+  if (isOnlyTeamRequested(TEAMS.platform))
+    return PR_STATUS.NEEDS_PLATFORM_REVIEW;
+  if (isOnlyTeamRequested(TEAMS.consumer))
+    return PR_STATUS.NEEDS_CONSUMER_REVIEW;
 
   if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
   if (pr.isApproved) return PR_STATUS.APPROVED;
@@ -169,10 +191,19 @@ const printPullRequests = async (pullRequests) => {
     prs
       .sort((a, b) => b.staleness - a.staleness)
       .forEach((pr) => {
-        // Compact format: [Title] (author) - age/stale days (<URL | #number>)
-        output += `• ${pr.title.trim()} (_${pr.user.login}_) - *${pr.age}d/${
-          pr.staleness
-        }d* (<${pr.html_url} | #${pr.number}>)\n`;
+        if (statusLabel === PR_STATUS.NEEDS_REVIEW.label) {
+          // Special format for "Needs Review" section
+          const teams = pr.requested_teams?.map((team) => team.name) || [];
+          const teamsList = teams.length > 0 ? ` [${teams.join(", ")}]` : "";
+          output += `• ${pr.title.trim()} (_${pr.user.login}_)${teamsList} - *${
+            pr.age
+          }d/${pr.staleness}d* [#${pr.number}](${pr.html_url})\n`;
+        } else {
+          // Default format for other sections
+          output += `• ${pr.title.trim()} (_${pr.user.login}_) - *${pr.age}d/${
+            pr.staleness
+          }d* [#${pr.number}](${pr.html_url})\n`;
+        }
       });
     output += "\n";
   });
