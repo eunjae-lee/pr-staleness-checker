@@ -194,15 +194,15 @@ const printPullRequests = async (pullRequests) => {
         if (statusLabel === PR_STATUS.NEEDS_REVIEW.label) {
           // Special format for "Needs Review" section
           const teams = pr.requested_teams?.map((team) => team.name) || [];
-          const teamsList = teams.length > 0 ? ` [${teams.join(", ")}]` : "";
-          output += `• ${pr.title.trim()} (_${pr.user.login}_)${teamsList} - *${
+          const teamsList = teams.length > 0 ? ` → ${teams.join(", ")}` : "";
+          output += `• ${pr.title.trim()} (_${pr.user.login}${teamsList}_) - *${
             pr.age
-          }d/${pr.staleness}d* [#${pr.number}](${pr.html_url})\n`;
+          }d/${pr.staleness}d* (<${pr.html_url} | #${pr.number}>)\n`;
         } else {
           // Default format for other sections
           output += `• ${pr.title.trim()} (_${pr.user.login}_) - *${pr.age}d/${
             pr.staleness
-          }d* [#${pr.number}](${pr.html_url})\n`;
+          }d* (<${pr.html_url} | #${pr.number}>)\n`;
         }
       });
     output += "\n";
