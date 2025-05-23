@@ -129,6 +129,7 @@ const parseCodeowners = (content) => {
   return rules;
 };
 
+// https://github.com/dytab/affected-codeowners/blob/main/src/codeowners/parse-pattern.ts
 const parsePattern = (pattern) => {
   // Handle specific edge cases first
   if (pattern.includes("***")) {
