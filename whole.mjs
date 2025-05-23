@@ -13,6 +13,15 @@ const DEVIN_LOGIN = "devin-ai-integration[bot]";
 
 const PRIORITY_LABELS = ["🚨 urgent", "Urgent", "High priority", "high-risk"];
 
+// Move these to the top level, after other constants
+let CODEOWNER_RULES = [];
+
+const initializeCodeowners = async () => {
+  const content = await fetchCodeowners();
+  CODEOWNER_RULES = parseCodeowners(content);
+  console.log("💡 Initialized CODEOWNERS rules:", CODEOWNER_RULES);
+};
+
 // Function to fetch all organization members
 const fetchOrgMembers = async () => {
   const url = `https://api.github.com/orgs/${REPO_OWNER}/members?per_page=100`;
@@ -79,6 +88,176 @@ const fetchPRReviews = async (prNumber) => {
   return response.json();
 };
 
+const fetchCodeowners = async () => {
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/.github/CODEOWNERS`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Error fetching CODEOWNERS: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const content = Buffer.from(data.content, "base64").toString();
+  return content;
+};
+
+const parseCodeowners = (content) => {
+  const rules = [];
+  const lines = content.split("\n");
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip comments and empty lines
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const [pattern, ...owners] = trimmed.split(/\s+/);
+    // Only include team rules
+    const teams = owners
+      .filter((owner) => owner.startsWith("@calcom/"))
+      .map((owner) => owner.replace("@calcom/", ""));
+
+    if (teams.length > 0) {
+      rules.push({ pattern, teams });
+    }
+  }
+
+  return rules;
+};
+
+const parsePattern = (pattern) => {
+  // Handle specific edge cases first
+  if (pattern.includes("***")) {
+    throw new Error("pattern cannot contain three consecutive asterisks");
+  } else if (pattern === "") {
+    throw new Error("empty pattern");
+  } else if (pattern === "/") {
+    // "/" doesn't match anything
+    return new RegExp("^$");
+  }
+
+  let segments = pattern.split("/");
+
+  if (segments[0] === "") {
+    // Leading slash: match is relative to root
+    segments = segments.slice(1);
+  } else {
+    // No leading slash - check for a single segment pattern
+    if (
+      segments.length === 1 ||
+      (segments.length === 2 && segments[1] === "")
+    ) {
+      if (segments[0] !== "**") {
+        segments = ["**", ...segments];
+      }
+    }
+  }
+
+  if (segments.length > 1 && segments[segments.length - 1] === "") {
+    // Trailing slash is equivalent to "/**"
+    segments[segments.length - 1] = "**";
+  }
+
+  const lastSegIndex = segments.length - 1;
+  const separator = "/";
+  let needSlash = false;
+  const re = ["^"];
+
+  segments.forEach((seg, i) => {
+    switch (seg) {
+      case "**":
+        if (i === 0 && i === lastSegIndex) {
+          // If the pattern is just "**", match everything
+          re.push(".+");
+        } else if (i === 0) {
+          // If the pattern starts with "**", match any leading path segment
+          re.push(`(?:.+${separator})?`);
+          needSlash = false;
+        } else if (i === lastSegIndex) {
+          // If the pattern ends with "**", match any trailing path segment
+          re.push(`${separator}.*`);
+        } else {
+          // Match zero or more path segments
+          re.push(`(?:${separator}.+)?`);
+          needSlash = true;
+        }
+        break;
+
+      case "*":
+        if (needSlash) {
+          re.push(separator);
+        }
+        // Match any characters except the separator
+        re.push(`[^${separator}]+`);
+        needSlash = true;
+        break;
+
+      default: {
+        if (needSlash) {
+          re.push(separator);
+        }
+
+        let escape = false;
+        for (const ch of seg) {
+          if (escape) {
+            escape = false;
+            // escape the next char
+            re.push(ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+            continue;
+          }
+
+          switch (ch) {
+            case "\\":
+              escape = true;
+              break;
+            case "*":
+              // Multi-character wildcard
+              re.push(`[^${separator}]*`);
+              break;
+            case "?":
+              // Single-character wildcard
+              re.push(`[^${separator}]`);
+              break;
+            default:
+              // escape if necessary
+              re.push(ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+              break;
+          }
+        }
+
+        if (i === lastSegIndex) {
+          // match descendent paths
+          re.push(`(?:${separator}.*)?`);
+        }
+
+        needSlash = true;
+      }
+    }
+  });
+
+  re.push("$");
+  return new RegExp(re.join(""));
+};
+
+const getCodeOwnerTeams = (files, codeownerRules) => {
+  const requiredTeams = new Set();
+
+  for (const file of files) {
+    for (const rule of codeownerRules) {
+      if (parsePattern(rule.pattern).test(file.filename)) {
+        // Add the teams directly from CODEOWNERS
+        rule.teams.forEach((team) => requiredTeams.add(team));
+      }
+    }
+  }
+
+  return Array.from(requiredTeams);
+};
+
 const calculateMetrics = async (pr) => {
   const createdDate = new Date(pr.created_at);
   const now = new Date();
@@ -114,43 +293,67 @@ const calculateMetrics = async (pr) => {
 
 const PR_STATUS = {
   HIGH_PRIORITY: { priority: 0, label: "🚨 High Priority" },
-  NEEDS_FOUNDATION_REVIEW: { priority: 1, label: "⚡ Needs Foundation Review" },
-  NEEDS_PLATFORM_REVIEW: { priority: 2, label: "🔧 Needs Platform Review" },
-  NEEDS_CONSUMER_REVIEW: { priority: 3, label: "👥 Needs Consumer Review" },
+  NEEDS_FOUNDATION_REVIEW: {
+    priority: 1,
+    label: "⚡ Needs Foundation Review 🛡️",
+  },
+  NEEDS_PLATFORM_REVIEW: { priority: 2, label: "🔧 Needs Platform Review 🛡️" },
+  NEEDS_CONSUMER_REVIEW: { priority: 3, label: "👥 Needs Consumer Review 🛡️" },
   NEEDS_REVIEW: { priority: 4, label: "👀 Needs Review" },
   CHANGES_REQUESTED: { priority: 5, label: "🔄 Changes requested" },
   APPROVED: { priority: 6, label: "✅ Approved" },
 };
 
 const TEAMS = {
-  foundation: "foundation",
-  platform: "platform",
-  consumer: "consumer",
+  foundation: "Foundation",
+  platform: "Platform",
+  consumer: "Consumer",
 };
 
-const getPRStatus = (pr) => {
+const getPRStatus = async (pr) => {
   // Check for priority labels first
   if (pr.labels.some((label) => PRIORITY_LABELS.includes(label.name))) {
     return PR_STATUS.HIGH_PRIORITY;
   }
 
-  // Check for team reviews based on CODEOWNERS
-  const requestedTeams = pr.requested_teams?.map((team) => team.slug) || [];
+  // Fetch PR files and use cached CODEOWNERS rules
+  const files = await fetchPRFiles(pr.number);
+  const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
 
-  // Check for single-team reviews
-  const isOnlyTeamRequested = (team) => {
-    const otherTeams = Object.values(TEAMS).filter((t) => t !== team);
+  // Get manually requested teams (excluding code owner teams)
+  const requestedTeams = pr.requested_teams?.map((team) => team.slug) || [];
+  const manuallyRequestedTeams = requestedTeams.filter(
+    (team) =>
+      !codeOwnerTeams.map((t) => t.toLowerCase()).includes(team.toLowerCase())
+  );
+
+  console.log("💡 DEBUG", {
+    prNumber: pr.number,
+    codeOwnerTeams,
+    requestedTeams,
+    manuallyRequestedTeams,
+    files,
+  });
+
+  // Check for single-team code owner reviews
+  const isOnlyTeamRequestedAsCodeOwner = (teamKey) => {
+    const teamName = TEAMS[teamKey];
+    const otherTeams = Object.values(TEAMS).filter((t) => t !== teamName);
     return (
-      requestedTeams.includes(team) &&
-      !otherTeams.some((t) => requestedTeams.includes(t))
+      codeOwnerTeams
+        .map((t) => t.toLowerCase())
+        .includes(teamName.toLowerCase()) &&
+      !otherTeams.some((t) =>
+        codeOwnerTeams.map((ct) => ct.toLowerCase()).includes(t.toLowerCase())
+      )
     );
   };
 
-  if (isOnlyTeamRequested(TEAMS.foundation))
+  if (isOnlyTeamRequestedAsCodeOwner("foundation"))
     return PR_STATUS.NEEDS_FOUNDATION_REVIEW;
-  if (isOnlyTeamRequested(TEAMS.platform))
+  if (isOnlyTeamRequestedAsCodeOwner("platform"))
     return PR_STATUS.NEEDS_PLATFORM_REVIEW;
-  if (isOnlyTeamRequested(TEAMS.consumer))
+  if (isOnlyTeamRequestedAsCodeOwner("consumer"))
     return PR_STATUS.NEEDS_CONSUMER_REVIEW;
 
   if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
@@ -167,8 +370,12 @@ const printPullRequests = async (pullRequests) => {
 
   const prsWithMetrics = await Promise.all(
     pullRequests.map(async (pr) => {
-      const metrics = await calculateMetrics(pr);
-      return { ...pr, ...metrics };
+      const [metrics, status, files] = await Promise.all([
+        calculateMetrics(pr),
+        getPRStatus(pr),
+        fetchPRFiles(pr.number),
+      ]);
+      return { ...pr, ...metrics, status, files };
     })
   );
 
@@ -178,9 +385,9 @@ const printPullRequests = async (pullRequests) => {
     return acc;
   }, {});
 
+  // Now we can use the pre-calculated status
   prsWithMetrics.forEach((pr) => {
-    const status = getPRStatus(pr);
-    groupedPRs[status.label].push(pr);
+    groupedPRs[pr.status.label].push(pr);
   });
 
   // Print each group, sorted by staleness within group
@@ -192,8 +399,20 @@ const printPullRequests = async (pullRequests) => {
       .sort((a, b) => b.staleness - a.staleness)
       .forEach((pr) => {
         if (statusLabel === PR_STATUS.NEEDS_REVIEW.label) {
+          // Get code owner teams for this PR
+          const codeOwnerTeams = getCodeOwnerTeams(
+            pr.files,
+            CODEOWNER_RULES
+          ).map((t) => t.toLowerCase());
+
           // Special format for "Needs Review" section
-          const teams = pr.requested_teams?.map((team) => team.name) || [];
+          const teams =
+            pr.requested_teams?.map((team) => {
+              const isCodeOwner = codeOwnerTeams.includes(
+                team.slug.toLowerCase()
+              );
+              return isCodeOwner ? `${team.name} 🛡️` : team.name;
+            }) || [];
           const teamsList = teams.length > 0 ? ` → ${teams.join(", ")}` : "";
           output += `• ${pr.title.trim()} (_${pr.user.login}${teamsList}_) - *${
             pr.age
@@ -211,8 +430,27 @@ const printPullRequests = async (pullRequests) => {
   return output;
 };
 
+const fetchPRFiles = async (prNumber) => {
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/files`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Error fetching PR files: ${response.statusText}`);
+  }
+
+  return response.json();
+};
+
 const main = async () => {
   try {
+    // Initialize CODEOWNERS first
+    await initializeCodeowners();
+
     const [pullRequests, orgMembers] = await Promise.all([
       fetchPullRequests(),
       fetchOrgMembers(),
