@@ -312,10 +312,10 @@ const PR_STATUS = {
   HIGH_PRIORITY: { priority: 0, label: "🚨 High Priority" },
   NEEDS_FOUNDATION_REVIEW: {
     priority: 1,
-    label: "⚡ Needs Foundation Review 🛡️",
+    label: "⚡ Needs Foundation Review",
   },
-  NEEDS_PLATFORM_REVIEW: { priority: 2, label: "🔧 Needs Platform Review 🛡️" },
-  NEEDS_CONSUMER_REVIEW: { priority: 3, label: "👥 Needs Consumer Review 🛡️" },
+  NEEDS_PLATFORM_REVIEW: { priority: 2, label: "🔧 Needs Platform Review" },
+  NEEDS_CONSUMER_REVIEW: { priority: 3, label: "👥 Needs Consumer Review" },
   NEEDS_REVIEW: { priority: 4, label: "👀 Needs Review" },
   CHANGES_REQUESTED: { priority: 5, label: "🔄 Changes requested" },
   APPROVED: { priority: 6, label: "✅ Approved" },
