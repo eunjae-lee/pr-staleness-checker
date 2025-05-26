@@ -19,7 +19,6 @@ let CODEOWNER_RULES = [];
 const initializeCodeowners = async () => {
   const content = await fetchCodeowners();
   CODEOWNER_RULES = parseCodeowners(content);
-  console.log("💡 Initialized CODEOWNERS rules:", CODEOWNER_RULES);
 };
 
 // Function to fetch all organization members
@@ -328,54 +327,49 @@ const TEAMS = {
   consumer: "Consumer",
 };
 
-const getPRStatus = async (pr) => {
+const getPRStatus = (pr) => {
   // Check for priority labels first
   if (pr.labels.some((label) => PRIORITY_LABELS.includes(label.name))) {
     return PR_STATUS.HIGH_PRIORITY;
   }
 
-  // Fetch PR files and use cached CODEOWNERS rules
-  const files = await fetchPRFiles(pr.number);
+  const files = pr.files;
   const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
+  const codeOwnerTeamsLower = codeOwnerTeams.map((t) => t.toLowerCase());
 
-  // Get manually requested teams (excluding code owner teams)
-  const requestedTeams = pr.requested_teams?.map((team) => team.slug) || [];
-  const manuallyRequestedTeams = requestedTeams.filter(
-    (team) =>
-      !codeOwnerTeams.map((t) => t.toLowerCase()).includes(team.toLowerCase())
-  );
-
-  console.log("💡 DEBUG", {
-    prNumber: pr.number,
-    codeOwnerTeams,
-    requestedTeams,
-    manuallyRequestedTeams,
-    files,
-  });
-
-  // Check for single-team code owner reviews
-  const isOnlyTeamRequestedAsCodeOwner = (teamKey) => {
-    const teamName = TEAMS[teamKey];
-    const otherTeams = Object.values(TEAMS).filter((t) => t !== teamName);
-    return (
-      codeOwnerTeams
-        .map((t) => t.toLowerCase())
-        .includes(teamName.toLowerCase()) &&
-      !otherTeams.some((t) =>
-        codeOwnerTeams.map((ct) => ct.toLowerCase()).includes(t.toLowerCase())
-      )
-    );
-  };
-
-  if (isOnlyTeamRequestedAsCodeOwner("foundation"))
-    return PR_STATUS.NEEDS_FOUNDATION_REVIEW;
-  if (isOnlyTeamRequestedAsCodeOwner("platform"))
-    return PR_STATUS.NEEDS_PLATFORM_REVIEW;
-  if (isOnlyTeamRequestedAsCodeOwner("consumer"))
-    return PR_STATUS.NEEDS_CONSUMER_REVIEW;
-
+  // If PR has changes requested or is approved, show that status regardless of code owners
   if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
   if (pr.isApproved) return PR_STATUS.APPROVED;
+
+  // Check if Foundation is the only code owner
+  const hasFoundation = codeOwnerTeamsLower.includes(
+    TEAMS.foundation.toLowerCase()
+  );
+  const hasOtherTeams = codeOwnerTeamsLower.some(
+    (team) => team.toLowerCase() !== TEAMS.foundation.toLowerCase()
+  );
+
+  if (hasFoundation && !hasOtherTeams) {
+    return PR_STATUS.NEEDS_FOUNDATION_REVIEW;
+  }
+
+  // Check for Platform + Foundation combination
+  const hasPlatform = codeOwnerTeamsLower.includes(
+    TEAMS.platform.toLowerCase()
+  );
+  if (hasFoundation && hasPlatform) {
+    return PR_STATUS.NEEDS_PLATFORM_REVIEW;
+  }
+
+  // Check for Consumer + Foundation combination
+  const hasConsumer = codeOwnerTeamsLower.includes(
+    TEAMS.consumer.toLowerCase()
+  );
+  if (hasFoundation && hasConsumer) {
+    return PR_STATUS.NEEDS_CONSUMER_REVIEW;
+  }
+
+  // If no code owners or other combinations, it goes to general review
   return PR_STATUS.NEEDS_REVIEW;
 };
 
@@ -388,12 +382,11 @@ const printPullRequests = async (pullRequests) => {
 
   const prsWithMetrics = await Promise.all(
     pullRequests.map(async (pr) => {
-      const [metrics, status, files] = await Promise.all([
+      const [metrics, files] = await Promise.all([
         calculateMetrics(pr),
-        getPRStatus(pr),
         fetchPRFiles(pr.number),
       ]);
-      return { ...pr, ...metrics, status, files };
+      return { ...pr, ...metrics, files };
     })
   );
 
@@ -405,7 +398,8 @@ const printPullRequests = async (pullRequests) => {
 
   // Now we can use the pre-calculated status
   prsWithMetrics.forEach((pr) => {
-    groupedPRs[pr.status.label].push(pr);
+    const status = getPRStatus(pr);
+    groupedPRs[status.label].push(pr);
   });
 
   // Print each group, sorted by staleness within group
