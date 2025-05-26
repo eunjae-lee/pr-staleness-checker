@@ -104,8 +104,24 @@ const calculateMetrics = async (pr) => {
   ]);
 
   // Get review status from all reviews
-  const isApproved = reviews.some((review) => review.state === "APPROVED");
-  const hasChangesRequested = reviews.some(
+  const latestReviewsByUser = reviews.reduce((acc, review) => {
+    // Keep only the latest review from each user
+    if (
+      !acc[review.user.login] ||
+      new Date(review.submitted_at) >
+        new Date(acc[review.user.login].submitted_at)
+    ) {
+      acc[review.user.login] = review;
+    }
+    return acc;
+  }, {});
+
+  // Check latest reviews only
+  const activeReviews = Object.values(latestReviewsByUser);
+  const isApproved = activeReviews.some(
+    (review) => review.state === "APPROVED"
+  );
+  const hasChangesRequested = activeReviews.some(
     (review) => review.state === "CHANGES_REQUESTED"
   );
 
