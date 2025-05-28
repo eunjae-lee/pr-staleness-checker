@@ -327,6 +327,29 @@ const TEAMS = {
   consumer: "Consumer",
 };
 
+// Helper function to format PR author name
+const formatAuthorName = (pr) => {
+  if (pr.user.login === DEVIN_LOGIN) {
+    // For Devin PRs, show "Devin + assignee"
+    if (pr.assignees && pr.assignees.length > 0) {
+      // Use the first assignee if multiple exist
+      return `DevinAI & ${pr.assignees[0].login}`;
+    }
+    return "DevinAI";
+  }
+  return pr.user.login;
+};
+
+// Helper function to format team list for "Needs Review" section
+const formatTeamList = (pr, codeOwnerTeams) => {
+  const teams =
+    pr.requested_teams?.map((team) => {
+      const isCodeOwner = codeOwnerTeams.includes(team.slug.toLowerCase());
+      return isCodeOwner ? `${team.name}🛡️` : team.name;
+    }) || [];
+  return teams.length > 0 ? ` → ${teams.join(" or ")}` : "";
+};
+
 const getPRStatus = (pr) => {
   // Check for priority labels first
   if (pr.labels.some((label) => PRIORITY_LABELS.includes(label.name))) {
@@ -415,22 +438,17 @@ const printPullRequests = async (pullRequests) => {
           ).map((t) => t.toLowerCase());
 
           // Special format for "Needs Review" section
-          const teams =
-            pr.requested_teams?.map((team) => {
-              const isCodeOwner = codeOwnerTeams.includes(
-                team.slug.toLowerCase()
-              );
-              return isCodeOwner ? `${team.name}🛡️` : team.name;
-            }) || [];
-          const teamsList = teams.length > 0 ? ` → ${teams.join(" or ")}` : "";
-          output += `• ${pr.title.trim()} (_${pr.user.login}${teamsList}_) - *${
-            pr.age
-          }d/${pr.staleness}d* (<${pr.html_url} | #${pr.number}>)\n`;
+          const teamsList = formatTeamList(pr, codeOwnerTeams);
+          output += `• ${pr.title.trim()} (_${formatAuthorName(
+            pr
+          )}${teamsList}_) - *${pr.age}d/${pr.staleness}d* (<${
+            pr.html_url
+          } | #${pr.number}>)\n`;
         } else {
           // Default format for other sections
-          output += `• ${pr.title.trim()} (_${pr.user.login}_) - *${pr.age}d/${
-            pr.staleness
-          }d* (<${pr.html_url} | #${pr.number}>)\n`;
+          output += `• ${pr.title.trim()} (_${formatAuthorName(pr)}_) - *${
+            pr.age
+          }d/${pr.staleness}d* (<${pr.html_url} | #${pr.number}>)\n`;
         }
       });
     output += "\n";
