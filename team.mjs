@@ -13,6 +13,19 @@ const INCLUDE_DEVIN = inputData.INCLUDE_DEVIN === "true";
 
 const DEVIN_LOGIN = "devin-ai-integration[bot]";
 
+// Helper function to format PR author name
+const formatAuthorName = (pr) => {
+  if (pr.user.login === DEVIN_LOGIN) {
+    // For Devin PRs, show "DevinAI & assignee"
+    if (pr.assignees && pr.assignees.length > 0) {
+      // Use the first assignee if multiple exist
+      return `DevinAI & ${pr.assignees[0].login}`;
+    }
+    return "DevinAI";
+  }
+  return pr.user.login;
+};
+
 // Get team members from environment variables
 const TEAM_MEMBERS =
   inputData.TEAM_MEMBERS?.split(",").map((username) => username.trim()) || [];
@@ -206,7 +219,9 @@ const printPullRequests = async (pullRequests) => {
       .forEach((pr) => {
         output +=
           `• *${pr.title.trim()}*\n` +
-          `  by ${pr.user.login} • Age: ${pr.age}d • Stale: ${pr.staleness}d\n` +
+          `  by ${formatAuthorName(pr)} • Age: ${pr.age}d • Stale: ${
+            pr.staleness
+          }d\n` +
           `  ${pr.html_url}\n\n`;
       });
   });
