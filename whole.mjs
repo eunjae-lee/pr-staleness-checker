@@ -336,6 +336,7 @@ const getPRStatus = (pr) => {
   const files = pr.files;
   const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
   const codeOwnerTeamsLower = codeOwnerTeams.map((t) => t.toLowerCase());
+  const onlyOneCodeOwner = codeOwnerTeamsLower.length === 1;
 
   // If PR has changes requested or is approved, show that status regardless of code owners
   if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
@@ -345,27 +346,23 @@ const getPRStatus = (pr) => {
   const hasFoundation = codeOwnerTeamsLower.includes(
     TEAMS.foundation.toLowerCase()
   );
-  const hasOtherTeams = codeOwnerTeamsLower.some(
-    (team) => team.toLowerCase() !== TEAMS.foundation.toLowerCase()
-  );
-
-  if (hasFoundation && !hasOtherTeams) {
+  if (hasFoundation && onlyOneCodeOwner) {
     return PR_STATUS.NEEDS_FOUNDATION_REVIEW;
   }
 
-  // Check for Platform + Foundation combination
+  // Check for Platform
   const hasPlatform = codeOwnerTeamsLower.includes(
     TEAMS.platform.toLowerCase()
   );
-  if (hasFoundation && hasPlatform) {
+  if (hasPlatform && onlyOneCodeOwner) {
     return PR_STATUS.NEEDS_PLATFORM_REVIEW;
   }
 
-  // Check for Consumer + Foundation combination
+  // Check for Consumer
   const hasConsumer = codeOwnerTeamsLower.includes(
     TEAMS.consumer.toLowerCase()
   );
-  if (hasFoundation && hasConsumer) {
+  if (hasConsumer && onlyOneCodeOwner) {
     return PR_STATUS.NEEDS_CONSUMER_REVIEW;
   }
 
@@ -423,9 +420,9 @@ const printPullRequests = async (pullRequests) => {
               const isCodeOwner = codeOwnerTeams.includes(
                 team.slug.toLowerCase()
               );
-              return isCodeOwner ? `${team.name} 🛡️` : team.name;
+              return isCodeOwner ? `${team.name}🛡️` : team.name;
             }) || [];
-          const teamsList = teams.length > 0 ? ` → ${teams.join(", ")}` : "";
+          const teamsList = teams.length > 0 ? ` → ${teams.join(" or ")}` : "";
           output += `• ${pr.title.trim()} (_${pr.user.login}${teamsList}_) - *${
             pr.age
           }d/${pr.staleness}d* (<${pr.html_url} | #${pr.number}>)\n`;
