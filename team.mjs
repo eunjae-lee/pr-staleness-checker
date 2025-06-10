@@ -13,6 +13,17 @@ const INCLUDE_DEVIN = inputData.INCLUDE_DEVIN === "true";
 
 const DEVIN_LOGIN = "devin-ai-integration[bot]";
 
+// Move these to the top level, after other constants
+let CODEOWNER_RULES = [];
+
+// Global API call counter
+let API_CALL_COUNT = 0;
+
+const initializeCodeowners = async () => {
+  const content = await fetchCodeowners();
+  CODEOWNER_RULES = parseCodeowners(content);
+};
+
 // Helper function to format PR author name
 const formatAuthorName = (pr) => {
   if (pr.user.login === DEVIN_LOGIN) {
@@ -35,8 +46,28 @@ if (TEAM_MEMBERS.length === 0) {
   process.exit(1);
 }
 
+// Function to fetch all organization members
+const fetchOrgMembers = async () => {
+  const url = `https://api.github.com/orgs/${REPO_OWNER}/members?per_page=100`;
+  API_CALL_COUNT++; // Increment counter
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Error fetching org members: ${response.statusText}`);
+  }
+
+  const members = await response.json();
+  return members.map((member) => member.login);
+};
+
 const fetchPullRequests = async () => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&per_page=100`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -74,6 +105,7 @@ const fetchPullRequests = async () => {
 
 const fetchPRComments = async (prNumber) => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/comments`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -90,6 +122,7 @@ const fetchPRComments = async (prNumber) => {
 
 const fetchPRReviews = async (prNumber) => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/reviews`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -102,6 +135,277 @@ const fetchPRReviews = async (prNumber) => {
   }
 
   return response.json();
+};
+
+const fetchCodeowners = async () => {
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/.github/CODEOWNERS`;
+  API_CALL_COUNT++; // Increment counter
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Error fetching CODEOWNERS: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const content = Buffer.from(data.content, "base64").toString();
+  return content;
+};
+
+const parseCodeowners = (content) => {
+  const rules = [];
+  const lines = content.split("\n");
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip comments and empty lines
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const [pattern, ...owners] = trimmed.split(/\s+/);
+    // Only include team rules
+    const teams = owners
+      .filter((owner) => owner.startsWith("@calcom/"))
+      .map((owner) => owner.replace("@calcom/", ""));
+
+    if (teams.length > 0) {
+      rules.push({ pattern, teams });
+    }
+  }
+
+  return rules;
+};
+
+// https://github.com/dytab/affected-codeowners/blob/main/src/codeowners/parse-pattern.ts
+const parsePattern = (pattern) => {
+  // Handle specific edge cases first
+  if (pattern.includes("***")) {
+    throw new Error("pattern cannot contain three consecutive asterisks");
+  } else if (pattern === "") {
+    throw new Error("empty pattern");
+  } else if (pattern === "/") {
+    // "/" doesn't match anything
+    return new RegExp("^$");
+  }
+
+  let segments = pattern.split("/");
+
+  if (segments[0] === "") {
+    // Leading slash: match is relative to root
+    segments = segments.slice(1);
+  } else {
+    // No leading slash - check for a single segment pattern
+    if (
+      segments.length === 1 ||
+      (segments.length === 2 && segments[1] === "")
+    ) {
+      if (segments[0] !== "**") {
+        segments = ["**", ...segments];
+      }
+    }
+  }
+
+  if (segments.length > 1 && segments[segments.length - 1] === "") {
+    // Trailing slash is equivalent to "/**"
+    segments[segments.length - 1] = "**";
+  }
+
+  const lastSegIndex = segments.length - 1;
+  const separator = "/";
+  let needSlash = false;
+  const re = ["^"];
+
+  segments.forEach((seg, i) => {
+    switch (seg) {
+      case "**":
+        if (i === 0 && i === lastSegIndex) {
+          // If the pattern is just "**", match everything
+          re.push(".+");
+        } else if (i === 0) {
+          // If the pattern starts with "**", match any leading path segment
+          re.push(`(?:.+${separator})?`);
+          needSlash = false;
+        } else if (i === lastSegIndex) {
+          // If the pattern ends with "**", match any trailing path segment
+          re.push(`${separator}.*`);
+        } else {
+          // Match zero or more path segments
+          re.push(`(?:${separator}.+)?`);
+          needSlash = true;
+        }
+        break;
+
+      case "*":
+        if (needSlash) {
+          re.push(separator);
+        }
+        // Match any characters except the separator
+        re.push(`[^${separator}]+`);
+        needSlash = true;
+        break;
+
+      default: {
+        if (needSlash) {
+          re.push(separator);
+        }
+
+        let escape = false;
+        for (const ch of seg) {
+          if (escape) {
+            escape = false;
+            // escape the next char
+            re.push(ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+            continue;
+          }
+
+          switch (ch) {
+            case "\\":
+              escape = true;
+              break;
+            case "*":
+              // Multi-character wildcard
+              re.push(`[^${separator}]*`);
+              break;
+            case "?":
+              // Single-character wildcard
+              re.push(`[^${separator}]`);
+              break;
+            default:
+              // escape if necessary
+              re.push(ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+              break;
+          }
+        }
+
+        if (i === lastSegIndex) {
+          // match descendent paths
+          re.push(`(?:${separator}.*)?`);
+        }
+
+        needSlash = true;
+      }
+    }
+  });
+
+  re.push("$");
+  return new RegExp(re.join(""));
+};
+
+const getCodeOwnerTeams = (files, codeownerRules) => {
+  const requiredTeams = new Set();
+
+  for (const file of files) {
+    for (const rule of codeownerRules) {
+      if (parsePattern(rule.pattern).test(file.filename)) {
+        // Add the teams directly from CODEOWNERS
+        rule.teams.forEach((team) => requiredTeams.add(team));
+      }
+    }
+  }
+
+  return Array.from(requiredTeams);
+};
+
+const fetchPRFiles = async (prNumber) => {
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/files`;
+  API_CALL_COUNT++; // Increment counter
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Error fetching PR files: ${response.statusText}`);
+  }
+
+  return response.json();
+};
+
+// Function to fetch community PRs (excluding team members and org members)
+const fetchCommunityPRs = async () => {
+  try {
+    // Fetch org members first
+    const orgMembers = await fetchOrgMembers();
+
+    // Combine team members and org members for exclusion
+    const excludedUsers = [
+      ...new Set([...TEAM_MEMBERS, DEVIN_LOGIN, ...orgMembers]),
+    ];
+    console.log("💡 excludedUsers", JSON.stringify(excludedUsers, null, 2));
+
+    // Build the search query excluding all team and org members
+    const excludeAuthors = excludedUsers
+      .map((user) => `-author:${user}`)
+      .join("+");
+    const searchQuery = `is:pr+is:open+repo:${REPO_OWNER}/${REPO_NAME}+${excludeAuthors}`;
+
+    const url = `https://api.github.com/search/issues?q=${searchQuery}`;
+
+    API_CALL_COUNT++; // Increment counter
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `token ${GITHUB_TOKEN}`,
+        Accept: "application/vnd.github.v3+json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error fetching community PRs: ${response.statusText}`);
+    }
+
+    const searchResults = await response.json();
+    console.log("💡 searchResults", JSON.stringify(searchResults, null, 2));
+
+    // Filter PRs that have code owners matching the team
+    const communityPRsWithTeamCodeOwners = [];
+
+    for (const pr of searchResults.items) {
+      // Get detailed PR info and files
+      const prDetailUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${pr.number}`;
+      API_CALL_COUNT++; // Increment counter
+      const prDetailResponse = await fetch(prDetailUrl, {
+        headers: {
+          Authorization: `token ${GITHUB_TOKEN}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      });
+
+      if (prDetailResponse.ok) {
+        const prDetail = await prDetailResponse.json();
+
+        // Fetch PR files to check code owners
+        const files = await fetchPRFiles(pr.number);
+        const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
+
+        // Check if any code owner team matches our team name (case insensitive)
+        const hasTeamAsCodeOwner = codeOwnerTeams.some(
+          (team) => team.toLowerCase() === TEAM_NAME.toLowerCase()
+        );
+
+        if (hasTeamAsCodeOwner) {
+          // Mark as community PR and add files info
+          prDetail.isCommunityPR = true;
+          prDetail.files = files;
+          prDetail.codeOwnerTeams = codeOwnerTeams;
+          communityPRsWithTeamCodeOwners.push(prDetail);
+        }
+      }
+    }
+
+    console.log(
+      "💡 communityPRsWithTeamReviews",
+      JSON.stringify(communityPRsWithTeamCodeOwners, null, 2)
+    );
+    return communityPRsWithTeamCodeOwners;
+  } catch (error) {
+    console.error("Error fetching community PRs:", error);
+    return [];
+  }
 };
 
 const calculateMetrics = async (pr) => {
@@ -172,9 +476,13 @@ const PR_STATUS = {
   NEEDS_REVIEW: { priority: 0, label: "👀 Needs review" },
   CHANGES_REQUESTED: { priority: 1, label: "🔄 Changes requested" },
   APPROVED: { priority: 2, label: "✅ Approved" },
+  COMMUNITY_PR: { priority: 3, label: "🌍 Community PRs" },
 };
 
 const getPRStatus = (pr) => {
+  // Check if it's a community PR first
+  if (pr.isCommunityPR) return PR_STATUS.COMMUNITY_PR;
+
   if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
   if (pr.isApproved) return PR_STATUS.APPROVED;
   return PR_STATUS.NEEDS_REVIEW;
@@ -184,10 +492,10 @@ const printPullRequests = async (pullRequests) => {
   let output = "";
 
   if (pullRequests.length === 0) {
-    return "No open pull requests from team members.";
+    return "No open pull requests found.";
   }
 
-  output += `📊 *Open Pull Requests from ${TEAM_NAME} Team Members*\n\n`;
+  output += `📊 *Open Pull Requests for ${TEAM_NAME} Team*\n\n`;
 
   // Process all PRs in parallel
   const prsWithMetrics = await Promise.all(
@@ -202,6 +510,7 @@ const printPullRequests = async (pullRequests) => {
     [PR_STATUS.NEEDS_REVIEW.label]: [],
     [PR_STATUS.CHANGES_REQUESTED.label]: [],
     [PR_STATUS.APPROVED.label]: [],
+    [PR_STATUS.COMMUNITY_PR.label]: [],
   };
 
   prsWithMetrics.forEach((pr) => {
@@ -217,11 +526,17 @@ const printPullRequests = async (pullRequests) => {
     prs
       .sort((a, b) => b.staleness - a.staleness)
       .forEach((pr) => {
+        // Show code owner info for community PRs
+        let additionalInfo = "";
+        if (pr.isCommunityPR && pr.codeOwnerTeams) {
+          additionalInfo = ` • Code owners: ${pr.codeOwnerTeams.join(", ")}`;
+        }
+
         output +=
           `• *${pr.title.trim()}*\n` +
           `  by ${formatAuthorName(pr)} • Age: ${pr.age}d • Stale: ${
             pr.staleness
-          }d\n` +
+          }d${additionalInfo}\n` +
           `  ${pr.html_url}\n\n`;
       });
   });
@@ -231,9 +546,22 @@ const printPullRequests = async (pullRequests) => {
 
 const main = async () => {
   try {
-    const pullRequests = await fetchPullRequests();
-    const output = await printPullRequests(pullRequests);
+    // Initialize CODEOWNERS first
+    await initializeCodeowners();
+
+    const teamPRs = await fetchPullRequests();
+    const communityPRs = await fetchCommunityPRs();
+
+    // Combine both team PRs and community PRs
+    const allPRs = [...teamPRs, ...communityPRs];
+
+    const output = await printPullRequests(allPRs);
+
     return output;
+    // Add API call count to output
+    // const apiCallSummary = `\n📊 *GitHub API Calls Summary*\nTotal API calls made: ${API_CALL_COUNT}\n`;
+
+    // return output + apiCallSummary;
   } catch (error) {
     return `Error: ${error.message}`;
   }
