@@ -16,6 +16,9 @@ const PRIORITY_LABELS = ["🚨 urgent", "Urgent", "High priority", "high-risk"];
 // Move these to the top level, after other constants
 let CODEOWNER_RULES = [];
 
+// Global API call counter
+let API_CALL_COUNT = 0;
+
 const initializeCodeowners = async () => {
   const content = await fetchCodeowners();
   CODEOWNER_RULES = parseCodeowners(content);
@@ -24,6 +27,7 @@ const initializeCodeowners = async () => {
 // Function to fetch all organization members
 const fetchOrgMembers = async () => {
   const url = `https://api.github.com/orgs/${REPO_OWNER}/members?per_page=100`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -41,6 +45,7 @@ const fetchOrgMembers = async () => {
 
 const fetchPullRequests = async () => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&per_page=100`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -57,6 +62,7 @@ const fetchPullRequests = async () => {
 
 const fetchPRComments = async (prNumber) => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/comments`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -73,6 +79,7 @@ const fetchPRComments = async (prNumber) => {
 
 const fetchPRReviews = async (prNumber) => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/reviews`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -89,6 +96,7 @@ const fetchPRReviews = async (prNumber) => {
 
 const fetchCodeowners = async () => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/.github/CODEOWNERS`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -319,6 +327,7 @@ const PR_STATUS = {
   NEEDS_REVIEW: { priority: 4, label: "👀 Needs Review" },
   CHANGES_REQUESTED: { priority: 5, label: "🔄 Changes requested" },
   APPROVED: { priority: 6, label: "✅ Approved" },
+  COMMUNITY_PRS: { priority: 7, label: "🌟 Community PRs" },
 };
 
 const TEAMS = {
@@ -350,7 +359,7 @@ const formatTeamList = (pr, codeOwnerTeams) => {
   return teams.length > 0 ? ` → ${teams.join(" or ")}` : "";
 };
 
-const getPRStatus = (pr) => {
+const getPRStatus = (pr, orgMembers) => {
   // Check for priority labels first
   if (pr.labels.some((label) => PRIORITY_LABELS.includes(label.name))) {
     return PR_STATUS.HIGH_PRIORITY;
@@ -360,6 +369,11 @@ const getPRStatus = (pr) => {
   const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
   const codeOwnerTeamsLower = codeOwnerTeams.map((t) => t.toLowerCase());
   const onlyOneCodeOwner = codeOwnerTeamsLower.length === 1;
+
+  // Check if this is a pre-marked community PR
+  if (pr.isCommunityPR) {
+    return PR_STATUS.COMMUNITY_PRS;
+  }
 
   // If PR has changes requested or is approved, show that status regardless of code owners
   if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
@@ -393,22 +407,15 @@ const getPRStatus = (pr) => {
   return PR_STATUS.NEEDS_REVIEW;
 };
 
-const printPullRequests = async (pullRequests) => {
+const printPullRequests = async (pullRequests, orgMembers) => {
   if (pullRequests.length === 0) {
     return "No open pull requests.";
   }
 
   let output = `📊 *Open Pull Requests in ${REPO_OWNER}/${REPO_NAME}*\n\n`;
 
-  const prsWithMetrics = await Promise.all(
-    pullRequests.map(async (pr) => {
-      const [metrics, files] = await Promise.all([
-        calculateMetrics(pr),
-        fetchPRFiles(pr.number),
-      ]);
-      return { ...pr, ...metrics, files };
-    })
-  );
+  // PRs already have metrics calculated
+  const prsWithMetrics = pullRequests;
 
   // Group PRs by status
   const groupedPRs = Object.values(PR_STATUS).reduce((acc, status) => {
@@ -418,7 +425,7 @@ const printPullRequests = async (pullRequests) => {
 
   // Now we can use the pre-calculated status
   prsWithMetrics.forEach((pr) => {
-    const status = getPRStatus(pr);
+    const status = getPRStatus(pr, orgMembers);
     groupedPRs[status.label].push(pr);
   });
 
@@ -459,6 +466,7 @@ const printPullRequests = async (pullRequests) => {
 
 const fetchPRFiles = async (prNumber) => {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/files`;
+  API_CALL_COUNT++; // Increment counter
   const response = await fetch(url, {
     headers: {
       Authorization: `token ${GITHUB_TOKEN}`,
@@ -473,6 +481,42 @@ const fetchPRFiles = async (prNumber) => {
   return response.json();
 };
 
+const fetchApprovedCommunityPRs = async (orgMembers) => {
+  const query = `is:pr+is:open+repo:${REPO_OWNER}/${REPO_NAME}+review:approved`;
+  const url = `https://api.github.com/search/issues?q=${query}`;
+
+  API_CALL_COUNT++; // Increment counter
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `token ${GITHUB_TOKEN}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Error fetching approved PRs: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+
+  // Filter to only community PRs (not org members or Devin)
+  const communityPRs = data.items.filter((pr) => {
+    const isOrgMember = orgMembers.includes(pr.user.login);
+    const isDevin = pr.user.login === DEVIN_LOGIN;
+    return !isOrgMember && !isDevin;
+  });
+
+  return communityPRs;
+};
+
+const enhancePRWithMetrics = async (pr) => {
+  const [metrics, files] = await Promise.all([
+    calculateMetrics(pr),
+    fetchPRFiles(pr.number),
+  ]);
+  return { ...pr, ...metrics, files };
+};
+
 const main = async () => {
   try {
     // Initialize CODEOWNERS first
@@ -483,14 +527,56 @@ const main = async () => {
       fetchOrgMembers(),
     ]);
 
-    // Filter out draft PRs and PRs from non-org members (except Devin if enabled)
-    const filteredPRs = pullRequests.filter((pr) => {
+    const approvedCommunityPRs = await fetchApprovedCommunityPRs(orgMembers);
+
+    // Filter org member and Devin PRs (normal processing)
+    const orgMemberAndDevinPRs = pullRequests.filter((pr) => {
       if (pr.draft) return false;
       if (INCLUDE_DEVIN && pr.user.login === DEVIN_LOGIN) return true;
       return orgMembers.includes(pr.user.login);
     });
 
-    const output = await printPullRequests(filteredPRs);
+    // Calculate metrics for org member/Devin PRs
+    const orgPRsWithMetrics = await Promise.all(
+      orgMemberAndDevinPRs.map(async (pr) => {
+        return await enhancePRWithMetrics(pr);
+      })
+    );
+
+    console.log(
+      "💡 approvedCommunityPRs",
+      JSON.stringify(approvedCommunityPRs, null, 2)
+    );
+    // Process approved community PRs (much smaller list)
+    const communityPRsWithMetrics = await Promise.all(
+      approvedCommunityPRs.map(async (pr) => {
+        return await enhancePRWithMetrics(pr);
+      })
+    );
+
+    // Filter community PRs to only those that need Foundation/Consumer approval
+    const validCommunityPRs = communityPRsWithMetrics
+      .filter((pr) => {
+        const codeOwnerTeams = getCodeOwnerTeams(pr.files, CODEOWNER_RULES);
+        const codeOwnerTeamsLower = codeOwnerTeams.map((t) => t.toLowerCase());
+        const hasFoundation = codeOwnerTeamsLower.includes(
+          TEAMS.foundation.toLowerCase()
+        );
+        const hasConsumer = codeOwnerTeamsLower.includes(
+          TEAMS.consumer.toLowerCase()
+        );
+        return hasFoundation || hasConsumer;
+      })
+      .map((pr) => ({ ...pr, isCommunityPR: true })); // Mark as community PR
+
+    // Combine all PRs
+    const allPRs = [...orgPRsWithMetrics, ...validCommunityPRs];
+    const output = await printPullRequests(allPRs, orgMembers);
+
+    // Add API call count to output
+    // const apiCallSummary = `\n📊 *GitHub API Calls Summary*\nTotal API calls made: ${API_CALL_COUNT}\n`;
+
+    // return output + apiCallSummary;
     return output;
   } catch (error) {
     return `Error: ${error.message}`;
