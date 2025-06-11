@@ -1,10 +1,15 @@
 {
   "name": "pr-staleness-checker",
   "version": "1.0.0",
-  "main": "index.mjs",
+  "main": "dist/team.mjs",
   "scripts": {
-    "dev": "node index.mjs",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx src/team.ts",
+    "dev:team": "tsx src/team.ts",
+    "dev:whole": "tsx src/whole.ts",
+    "build": "npm run clean && ENTRY=team vite build && ENTRY=whole vite build",
+    "start:team": "node dist/team.mjs",
+    "start:whole": "node dist/whole.mjs",
+    "clean": "rm -rf dist"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +18,11 @@
   "dependencies": {
     "dotenv": "^16.5.0",
     "node-fetch": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.31",
+    "tsx": "^4.19.2",
+    "vite": "^6.3.5"
   },
   "type": "module"
 }
