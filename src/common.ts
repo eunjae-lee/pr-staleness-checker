@@ -389,14 +389,36 @@ export const fetchPRFiles = async (prNumber: number): Promise<GitHubFile[]> => {
   return response.json() as Promise<GitHubFile[]>;
 };
 
+// Helper function to calculate business days between two dates (excluding weekends)
+const getBusinessDays = (startDate: Date, endDate: Date): number => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  // Set both dates to midnight to ensure consistent calculation
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+
+  let businessDays = 0;
+  const current = new Date(start);
+
+  while (current <= end) {
+    const dayOfWeek = current.getDay();
+    // Skip weekends (0 = Sunday, 6 = Saturday)
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      businessDays++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+
+  return businessDays;
+};
+
 export const calculateMetrics = async (
   pr: GitHubPullRequest
 ): Promise<PRMetrics> => {
   const createdDate = new Date(pr.created_at);
   const now = new Date();
-  const age = Math.ceil(
-    Math.abs(now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24)
-  );
+  const age = getBusinessDays(createdDate, now);
 
   const [comments, reviews] = await Promise.all([
     fetchPRComments(pr.number),
@@ -434,9 +456,7 @@ export const calculateMetrics = async (
     ...reviews.map((r) => ({ date: new Date(r.submitted_at) })),
   ].sort((a, b) => b.date.getTime() - a.date.getTime())[0].date;
 
-  const staleness = Math.ceil(
-    Math.abs(now.getTime() - lastActivity.getTime()) / (1000 * 60 * 60 * 24)
-  );
+  const staleness = getBusinessDays(lastActivity, now);
 
   return {
     age,
