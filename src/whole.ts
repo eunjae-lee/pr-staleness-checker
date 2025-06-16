@@ -102,12 +102,13 @@ const getPRStatus = (pr: GitHubPullRequest, orgMembers: string[]): PRStatus => {
 const printPullRequests = async (
   pullRequests: GitHubPullRequest[],
   orgMembers: string[]
-): Promise<string> => {
+): Promise<string[]> => {
   if (pullRequests.length === 0) {
-    return "No open pull requests.";
+    return ["No open pull requests."];
   }
 
-  let output = `📊 *Open Pull Requests in calcom/cal.com*\n\n`;
+  const sections: string[] = [];
+  const title = "📊 *Open Pull Requests in calcom/cal.com*\n";
 
   // PRs already have metrics calculated
   const prsWithMetrics = pullRequests;
@@ -121,7 +122,10 @@ const printPullRequests = async (
   Object.entries(groupedPRs).forEach(([statusLabel, prs]) => {
     if (prs.length === 0) return;
 
-    output += `*${statusLabel}* (${prs.length})\n`;
+    // Skip the NEEDS_REVIEW section now
+    if (statusLabel === PR_STATUS.NEEDS_REVIEW.label) return;
+
+    let sectionOutput = `*${statusLabel}* (${prs.length})\n`;
     prs.forEach((pr) => {
       if (statusLabel === PR_STATUS.NEEDS_REVIEW.label) {
         // Get code owner teams for this PR
@@ -132,16 +136,21 @@ const printPullRequests = async (
 
         // Special format for "Needs Review" section
         const teamsList = formatTeamList(pr, codeOwnerTeams);
-        output += formatPRLine(pr, teamsList) + "\n";
+        sectionOutput += formatPRLine(pr, teamsList) + "\n";
       } else {
         // Default format for other sections
-        output += formatPRLine(pr) + "\n";
+        sectionOutput += formatPRLine(pr) + "\n";
       }
     });
-    output += "\n";
+    sections.push(sectionOutput);
   });
 
-  return output;
+  // Combine title with first section if there are any sections
+  if (sections.length > 0) {
+    sections[0] = title + "\n" + sections[0];
+  }
+
+  return sections;
 };
 
 const fetchApprovedCommunityPRs = async (
@@ -173,7 +182,7 @@ const fetchApprovedCommunityPRs = async (
   return communityPRs;
 };
 
-const main = async (): Promise<string> => {
+const main = async (): Promise<string[]> => {
   try {
     // Initialize CODEOWNERS first
     await initializeCodeowners();
@@ -226,14 +235,12 @@ const main = async (): Promise<string> => {
 
     // Combine all PRs
     const allPRs = [...orgPRsWithMetrics, ...validCommunityPRs];
-    const output = await printPullRequests(allPRs, orgMembers);
-
-    return output;
+    return await printPullRequests(allPRs, orgMembers);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return `Error: ${errorMessage}`;
+    console.error(error instanceof Error ? error.message : String(error));
+    return [];
   }
 };
 
-const output = await main();
+const output = (await main()).join("---\n");
 console.log(output);
