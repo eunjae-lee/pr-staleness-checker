@@ -12,12 +12,7 @@ export const TEAM_NAME = inputData.TEAM_NAME!;
 export const INCLUDE_DEVIN = inputData.INCLUDE_DEVIN === "true";
 export const DEVIN_LOGIN = "devin-ai-integration[bot]";
 
-export const PRIORITY_LABELS = [
-  "🚨 urgent",
-  "Urgent",
-  "High priority",
-  "high-risk",
-];
+export const PRIORITY_LABELS = ["🚨 urgent", "Urgent", "High priority"];
 
 // Interfaces for GitHub API responses
 export interface GitHubUser {
