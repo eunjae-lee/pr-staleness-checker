@@ -138,20 +138,34 @@ export const fetchOrgMembers = async (): Promise<string[]> => {
 };
 
 export const fetchPullRequests = async (): Promise<GitHubPullRequest[]> => {
-  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&per_page=100`;
-  API_CALL_COUNT++; // Increment counter
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `token ${GITHUB_TOKEN}`,
-      Accept: "application/vnd.github.v3+json",
-    },
-  });
+  const allPRs: GitHubPullRequest[] = [];
+  const perPage = 100;
+  const maxPages = 5;
 
-  if (!response.ok) {
-    throw new Error(`Error fetching PRs: ${response.statusText}`);
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&per_page=${perPage}&page=${page}`;
+    API_CALL_COUNT++; // Increment counter
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `token ${GITHUB_TOKEN}`,
+        Accept: "application/vnd.github.v3+json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error fetching PRs: ${response.statusText}`);
+    }
+
+    const pagePRs = (await response.json()) as GitHubPullRequest[];
+    allPRs.push(...pagePRs);
+
+    // If we got fewer PRs than perPage, we've reached the end
+    if (pagePRs.length < perPage) {
+      break;
+    }
   }
 
-  return response.json() as Promise<GitHubPullRequest[]>;
+  return allPRs;
 };
 
 export const fetchPRComments = async (

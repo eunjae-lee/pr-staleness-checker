@@ -44,27 +44,45 @@ const fetchCommunityPRs = async (): Promise<GitHubPullRequest[]> => {
       .join("+");
     const searchQuery = `is:pr+is:open+repo:calcom/cal.com+${excludeAuthors}`;
 
-    const url = `https://api.github.com/search/issues?q=${searchQuery}`;
+    const allSearchResults: GitHubPullRequest[] = [];
+    const maxPages = 5;
+    const perPage = 100;
 
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `token ${inputData.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github.v3+json",
-      },
-    });
+    // Fetch up to 5 pages of results
+    for (let page = 1; page <= maxPages; page++) {
+      const url = `https://api.github.com/search/issues?q=${searchQuery}&per_page=${perPage}&page=${page}`;
 
-    if (!response.ok) {
-      throw new Error(`Error fetching community PRs: ${response.statusText}`);
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `token ${inputData.GITHUB_TOKEN}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Error fetching community PRs page ${page}: ${response.statusText}`
+        );
+      }
+
+      const searchResults = (await response.json()) as {
+        items: GitHubPullRequest[];
+        total_count: number;
+      };
+
+      // Add results from this page
+      allSearchResults.push(...searchResults.items);
+
+      // If we got fewer results than per_page, we've reached the end
+      if (searchResults.items.length < perPage) {
+        break;
+      }
     }
-
-    const searchResults = (await response.json()) as {
-      items: GitHubPullRequest[];
-    };
 
     // Filter PRs that have code owners matching the team
     const communityPRsWithTeamCodeOwners: GitHubPullRequest[] = [];
 
-    for (const pr of searchResults.items) {
+    for (const pr of allSearchResults) {
       // Get detailed PR info and files
       const prDetailUrl = `https://api.github.com/repos/calcom/cal.com/pulls/${pr.number}`;
       const prDetailResponse = await fetch(prDetailUrl, {
@@ -171,14 +189,17 @@ const main = async (): Promise<string> => {
     // 2. OR PRs from Devin (if enabled) where at least one assignee is a team member
     const filteredTeamPRs = teamPRs.filter((pr) => {
       // Skip draft PRs
-      if (pr.draft) return false;
+      if (pr.draft) {
+        return false;
+      }
 
       // If PR is from a team member, include it
-      if (TEAM_MEMBERS.includes(pr.user.login)) return true;
+      if (TEAM_MEMBERS.includes(pr.user.login)) {
+        return true;
+      }
 
       // If Devin is included and PR is from Devin, check assignees
       if (INCLUDE_DEVIN && pr.user.login === DEVIN_LOGIN) {
-        // Check if any assignee is a team member
         return pr.assignees.some((assignee) =>
           TEAM_MEMBERS.includes(assignee.login)
         );
