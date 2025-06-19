@@ -14,6 +14,11 @@ export const DEVIN_LOGIN = "devin-ai-integration[bot]";
 
 export const PRIORITY_LABELS = ["🚨 urgent", "Urgent", "High priority"];
 
+// Performance configuration constants
+export const MAX_PAGES_FOR_PRS = 5;
+export const MAX_PAGES_FOR_COMMUNITY_SEARCH = 3; // Reduced for better performance
+export const COMMUNITY_SEARCH_LIMIT = 200; // Early termination limit
+
 // Interfaces for GitHub API responses
 export interface GitHubUser {
   login: string;
@@ -140,9 +145,8 @@ export const fetchOrgMembers = async (): Promise<string[]> => {
 export const fetchPullRequests = async (): Promise<GitHubPullRequest[]> => {
   const allPRs: GitHubPullRequest[] = [];
   const perPage = 100;
-  const maxPages = 5;
 
-  for (let page = 1; page <= maxPages; page++) {
+  for (let page = 1; page <= MAX_PAGES_FOR_PRS; page++) {
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&per_page=${perPage}&page=${page}`;
     API_CALL_COUNT++; // Increment counter
     const response = await fetch(url, {
@@ -566,7 +570,7 @@ export const fetchCommunityPRsBySearch = async (
   try {
     const {
       additionalSearchCriteria = [],
-      maxPages = 5,
+      maxPages = MAX_PAGES_FOR_COMMUNITY_SEARCH,
       perPage = 100,
       excludeDrafts = true,
     } = params;
@@ -625,6 +629,11 @@ export const fetchCommunityPRsBySearch = async (
 
       // If we got fewer results than per_page, we've reached the end
       if (searchResults.items.length < perPage) {
+        break;
+      }
+
+      // Early termination if we have enough results
+      if (allSearchResults.length >= COMMUNITY_SEARCH_LIMIT) {
         break;
       }
     }

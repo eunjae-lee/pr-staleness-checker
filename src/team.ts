@@ -28,45 +28,62 @@ if (TEAM_MEMBERS.length === 0) {
   process.exit(1);
 }
 
-// Function to fetch community PRs (excluding team members and org members)
+// Performance configuration constants
+const COMMUNITY_PR_CONCURRENCY_LIMIT = 10;
+const METRICS_CONCURRENCY_LIMIT = 15;
+
+// Optimized function to fetch community PRs with parallel processing
 const fetchCommunityPRs = async (): Promise<GitHubPullRequest[]> => {
   try {
     // Use the common utility function to fetch community PRs
     const allSearchResults = await fetchCommunityPRsBySearch({});
 
-    // Filter PRs that have code owners matching the team
+    // Process PRs in parallel with concurrency limit
+    const concurrencyLimit = COMMUNITY_PR_CONCURRENCY_LIMIT;
     const communityPRsWithTeamCodeOwners: GitHubPullRequest[] = [];
 
-    for (const pr of allSearchResults) {
-      // Get detailed PR info and files
-      const prDetailUrl = `https://api.github.com/repos/calcom/cal.com/pulls/${pr.number}`;
-      const prDetailResponse = await fetch(prDetailUrl, {
-        headers: {
-          Authorization: `token ${inputData.GITHUB_TOKEN}`,
-          Accept: "application/vnd.github.v3+json",
-        },
-      });
+    // Process PRs in batches to avoid overwhelming the API
+    for (let i = 0; i < allSearchResults.length; i += concurrencyLimit) {
+      const batch = allSearchResults.slice(i, i + concurrencyLimit);
 
-      if (prDetailResponse.ok) {
-        const prDetail = (await prDetailResponse.json()) as GitHubPullRequest;
+      const batchResults = await Promise.allSettled(
+        batch.map(async (pr) => {
+          try {
+            // Only fetch files to check code owners (skip PR details since we have basic info)
+            const files = await fetchPRFiles(pr.number);
+            const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
 
-        // Fetch PR files to check code owners
-        const files = await fetchPRFiles(pr.number);
-        const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
+            // Check if any code owner team matches our team name (case insensitive)
+            const hasTeamAsCodeOwner = codeOwnerTeams.some(
+              (team) => team.toLowerCase() === TEAM_NAME.toLowerCase()
+            );
 
-        // Check if any code owner team matches our team name (case insensitive)
-        const hasTeamAsCodeOwner = codeOwnerTeams.some(
-          (team) => team.toLowerCase() === TEAM_NAME.toLowerCase()
-        );
+            if (hasTeamAsCodeOwner) {
+              // Use the search result PR data and add files info
+              return {
+                ...pr,
+                isCommunityPR: true,
+                files,
+                codeOwnerTeams,
+              } as GitHubPullRequest;
+            }
+            return null;
+          } catch (error) {
+            console.warn(`Error processing PR ${pr.number}:`, error);
+            return null;
+          }
+        })
+      );
 
-        if (hasTeamAsCodeOwner) {
-          // Mark as community PR and add files info
-          prDetail.isCommunityPR = true;
-          prDetail.files = files;
-          prDetail.codeOwnerTeams = codeOwnerTeams;
-          communityPRsWithTeamCodeOwners.push(prDetail);
-        }
-      }
+      // Filter out failed requests and null results
+      const validResults = batchResults
+        .filter(
+          (result): result is PromiseFulfilledResult<GitHubPullRequest> =>
+            result.status === "fulfilled" && result.value !== null
+        )
+        .map((result) => result.value);
+
+      communityPRsWithTeamCodeOwners.push(...validResults);
     }
 
     return communityPRsWithTeamCodeOwners;
@@ -103,13 +120,38 @@ const printPullRequests = async (
 
   output += `📊 *Open Pull Requests for ${TEAM_NAME} Team*\n\n`;
 
-  // Process all PRs in parallel
-  const prsWithMetrics = await Promise.all(
-    pullRequests.map(async (pr) => {
-      const metrics = await calculateMetrics(pr);
-      return { ...pr, ...metrics };
-    })
-  );
+  // Process all PRs in parallel with concurrency limit
+  const concurrencyLimit = METRICS_CONCURRENCY_LIMIT;
+  const prsWithMetrics: GitHubPullRequest[] = [];
+
+  for (let i = 0; i < pullRequests.length; i += concurrencyLimit) {
+    const batch = pullRequests.slice(i, i + concurrencyLimit);
+
+    const batchResults = await Promise.allSettled(
+      batch.map(async (pr) => {
+        try {
+          const metrics = await calculateMetrics(pr);
+          return { ...pr, ...metrics };
+        } catch (error) {
+          console.warn(`Error calculating metrics for PR ${pr.number}:`, error);
+          return {
+            ...pr,
+            age: 0,
+            staleness: 0,
+            isApproved: false,
+            hasChangesRequested: false,
+          };
+        }
+      })
+    );
+
+    // Process results with proper type checking
+    for (const result of batchResults) {
+      if (result.status === "fulfilled") {
+        prsWithMetrics.push(result.value);
+      }
+    }
+  }
 
   // Group PRs by status using utility function
   const groupedPRs = groupAndSortPRs(prsWithMetrics, PR_STATUS, getPRStatus);
@@ -137,7 +179,11 @@ const main = async (): Promise<string> => {
     // Initialize CODEOWNERS first
     await initializeCodeowners();
 
-    const teamPRs = await fetchPullRequests();
+    // Fetch team PRs and community PRs in parallel
+    const [teamPRs, communityPRs] = await Promise.all([
+      fetchPullRequests(),
+      fetchCommunityPRs(),
+    ]);
 
     // Filter PRs with the team conditions:
     // 1. PRs from team members (not in draft)
@@ -162,8 +208,6 @@ const main = async (): Promise<string> => {
 
       return false;
     });
-
-    const communityPRs = await fetchCommunityPRs();
 
     // Combine both team PRs and community PRs
     const allPRs = [...filteredTeamPRs, ...communityPRs];
