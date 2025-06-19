@@ -123,8 +123,8 @@ const printPullRequests = async (
   Object.entries(groupedPRs).forEach(([statusLabel, prs]) => {
     if (prs.length === 0) return;
 
-    // Skip the NEEDS_REVIEW section now
-    if (statusLabel === PR_STATUS.NEEDS_REVIEW.label) return;
+    // Print only the HIGH_PRIORITY section
+    if (statusLabel !== PR_STATUS.HIGH_PRIORITY.label) return;
 
     let sectionOutput = `*${statusLabel}* (${prs.length})\n`;
     prs.forEach((pr) => {
@@ -249,7 +249,7 @@ const main = async (): Promise<string[]> => {
     ]);
 
     const approvedCommunityPRs = await fetchApprovedCommunityPRs(orgMembers);
-    const oldestCommunityPRs = await fetchOldestCommunityPRs(orgMembers);
+    // const oldestCommunityPRs = await fetchOldestCommunityPRs(orgMembers);
 
     // Filter org member and Devin PRs (normal processing)
     const orgMemberAndDevinPRs = pullRequests.filter((pr) => {
@@ -295,17 +295,17 @@ const main = async (): Promise<string[]> => {
     const sections = await printPullRequests(allPRs, orgMembers);
 
     // Add oldest community PRs section
-    if (oldestCommunityPRs.length > 0) {
-      let oldestSection = `*🕰️ Oldest Community PRs* (${oldestCommunityPRs.length})\n`;
-      oldestCommunityPRs.forEach((pr) => {
-        const additionalInfo =
-          pr.isCommunityPR && pr.codeOwnerTeams
-            ? ` → ${pr.codeOwnerTeams.join("🛡️ or ")}🛡️`
-            : "";
-        oldestSection += formatPRLine(pr, additionalInfo) + "\n";
-      });
-      sections.push(oldestSection);
-    }
+    // if (oldestCommunityPRs.length > 0) {
+    //   let oldestSection = `*🕰️ Oldest Community PRs* (${oldestCommunityPRs.length})\n`;
+    //   oldestCommunityPRs.forEach((pr) => {
+    //     const additionalInfo =
+    //       pr.isCommunityPR && pr.codeOwnerTeams
+    //         ? ` → ${pr.codeOwnerTeams.join("🛡️ or ")}🛡️`
+    //         : "";
+    //     oldestSection += formatPRLine(pr, additionalInfo) + "\n";
+    //   });
+    //   sections.push(oldestSection);
+    // }
 
     return sections;
   } catch (error) {

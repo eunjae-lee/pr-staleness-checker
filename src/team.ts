@@ -160,7 +160,27 @@ const printPullRequests = async (
   Object.entries(groupedPRs).forEach(([statusLabel, prs]) => {
     if (prs.length === 0) return;
 
-    output += `*${statusLabel}* (${prs.length})\n`;
+    // Special handling for community PRs: sort by oldest and limit to 5
+    if (statusLabel === PR_STATUS.COMMUNITY_PR.label) {
+      const sortedCommunityPRs = prs
+        .sort((a, b) => (b.age || 0) - (a.age || 0)) // Sort by oldest first
+        .slice(0, 5); // Limit to 5 PRs
+
+      const totalCount = prs.length;
+      const showingCount = sortedCommunityPRs.length;
+
+      if (totalCount === showingCount) {
+        output += `*${statusLabel}* (${totalCount})\n`;
+      } else {
+        output += `*${statusLabel}* (${totalCount} total, showing ${showingCount} oldest)\n`;
+      }
+
+      prs = sortedCommunityPRs; // Use the sorted and limited PRs
+    } else {
+      output += `*${statusLabel}* (${prs.length})\n`;
+    }
+
+    // Common logic for formatting PR lines
     prs.forEach((pr) => {
       const additionalInfo =
         pr.isCommunityPR && pr.codeOwnerTeams
