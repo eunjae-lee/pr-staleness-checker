@@ -181,6 +181,11 @@ export const fetchPRComments = async (
   });
 
   if (!response.ok) {
+    console.log("[ERROR] fetchPRComments", {
+      url,
+      prNumber,
+      statusText: response.statusText,
+    });
     throw new Error(`Error fetching PR comments: ${response.statusText}`);
   }
 
@@ -200,6 +205,11 @@ export const fetchPRReviews = async (
   });
 
   if (!response.ok) {
+    console.log("[ERROR] fetchPRReviews", {
+      url,
+      prNumber,
+      statusText: response.statusText,
+    });
     throw new Error(`Error fetching PR reviews: ${response.statusText}`);
   }
 
@@ -425,6 +435,11 @@ const getBusinessDays = (startDate: Date, endDate: Date): number => {
 export const calculateMetrics = async (
   pr: GitHubPullRequest
 ): Promise<PRMetrics> => {
+  // Validate that pr.number exists
+  if (!pr.number) {
+    throw new Error(`PR number is undefined for PR: ${pr.title}`);
+  }
+
   const createdDate = new Date(pr.created_at);
   const now = new Date();
   const age = getBusinessDays(createdDate, now);
@@ -491,6 +506,11 @@ export const formatAuthorName = (pr: GitHubPullRequest): string => {
 export const enhancePRWithMetrics = async (
   pr: GitHubPullRequest
 ): Promise<GitHubPullRequest> => {
+  // Validate that pr.number exists
+  if (!pr.number) {
+    throw new Error(`PR number is undefined for PR: ${pr.title}`);
+  }
+
   const [metrics, files] = await Promise.all([
     calculateMetrics(pr),
     fetchPRFiles(pr.number),
@@ -536,9 +556,21 @@ export const groupAndSortPRs = <T extends Record<string, PRStatus>>(
 
 // Utility function to fetch community PRs using author exclusion logic
 export const fetchCommunityPRsBySearch = async (
-  additionalSearchCriteria: string[] = []
+  params: {
+    additionalSearchCriteria?: string[];
+    maxPages?: number;
+    perPage?: number;
+    excludeDrafts?: boolean;
+  } = {}
 ): Promise<GitHubPullRequest[]> => {
   try {
+    const {
+      additionalSearchCriteria = [],
+      maxPages = 5,
+      perPage = 100,
+      excludeDrafts = true,
+    } = params;
+
     // Fetch org members first
     const orgMembers = await fetchOrgMembers();
 
@@ -549,16 +581,18 @@ export const fetchCommunityPRsBySearch = async (
       .join("+");
 
     const baseQuery = `is:pr+is:open+repo:${REPO_OWNER}/${REPO_NAME}+${excludeAuthors}`;
+
+    // Add draft exclusion if requested
+    const draftExclusion = excludeDrafts ? "+draft:false" : "";
+
     const searchQuery =
       additionalSearchCriteria.length > 0
-        ? `${baseQuery}+${additionalSearchCriteria.join("+")}`
-        : baseQuery;
+        ? `${baseQuery}${draftExclusion}+${additionalSearchCriteria.join("+")}`
+        : `${baseQuery}${draftExclusion}`;
 
     const allSearchResults: GitHubPullRequest[] = [];
-    const maxPages = 5;
-    const perPage = 100;
 
-    // Fetch up to 5 pages of results
+    // Fetch up to maxPages pages of results
     for (let page = 1; page <= maxPages; page++) {
       const url = `https://api.github.com/search/issues?q=${searchQuery}&per_page=${perPage}&page=${page}`;
       API_CALL_COUNT++; // Increment counter
@@ -571,6 +605,11 @@ export const fetchCommunityPRsBySearch = async (
       });
 
       if (!response.ok) {
+        console.log("[ERROR] fetchCommunityPRsBySearch", {
+          url,
+          page,
+          statusText: response.statusText,
+        });
         throw new Error(
           `Error fetching community PRs page ${page}: ${response.statusText}`
         );

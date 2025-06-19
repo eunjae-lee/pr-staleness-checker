@@ -32,7 +32,7 @@ if (TEAM_MEMBERS.length === 0) {
 const fetchCommunityPRs = async (): Promise<GitHubPullRequest[]> => {
   try {
     // Use the common utility function to fetch community PRs
-    const allSearchResults = await fetchCommunityPRsBySearch();
+    const allSearchResults = await fetchCommunityPRsBySearch({});
 
     // Filter PRs that have code owners matching the team
     const communityPRsWithTeamCodeOwners: GitHubPullRequest[] = [];

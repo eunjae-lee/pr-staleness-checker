@@ -157,7 +157,85 @@ const printPullRequests = async (
 const fetchApprovedCommunityPRs = async (
   orgMembers: string[]
 ): Promise<GitHubPullRequest[]> => {
-  return await fetchCommunityPRsBySearch(["review:approved"]);
+  return await fetchCommunityPRsBySearch({
+    additionalSearchCriteria: ["review:approved"],
+  });
+};
+
+const fetchOldestCommunityPRs = async (
+  orgMembers: string[]
+): Promise<GitHubPullRequest[]> => {
+  try {
+    // Fetch community PRs sorted by creation date (oldest first) - only 1 page with 50 items
+    const communityPRs = await fetchCommunityPRsBySearch({
+      additionalSearchCriteria: ["sort:created-asc"],
+      maxPages: 1,
+      perPage: 50,
+      excludeDrafts: true,
+    });
+
+    const oldestCommunityPRs: GitHubPullRequest[] = [];
+
+    for (const pr of communityPRs) {
+      if (oldestCommunityPRs.length >= 5) {
+        break;
+      }
+
+      // Skip org members and Devin
+      if (orgMembers.includes(pr.user.login) || pr.user.login === DEVIN_LOGIN) {
+        continue;
+      }
+
+      // Validate that pr.number exists
+      if (!pr.number) {
+        console.warn(`Skipping PR without number: ${pr.title}`);
+        continue;
+      }
+
+      try {
+        // Instead of fetching individual PR details, use the search result directly
+        // and only fetch the files to check code owners
+        const files = await fetchPRFiles(pr.number);
+
+        // Check if Foundation is a code owner
+        const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
+        const hasFoundation = codeOwnerTeams.some(
+          (team) => team.toLowerCase() === TEAMS.foundation.toLowerCase()
+        );
+
+        if (!hasFoundation) {
+          continue;
+        }
+
+        // Calculate metrics using the search result PR data
+        const metrics = await calculateMetrics(pr);
+
+        // Skip if changes are requested
+        if (metrics.hasChangesRequested) {
+          continue;
+        }
+
+        // Add to our list
+        const prWithMetrics = {
+          ...pr,
+          ...metrics,
+          files,
+          codeOwnerTeams,
+          isCommunityPR: true,
+        };
+
+        oldestCommunityPRs.push(prWithMetrics);
+      } catch (error) {
+        console.warn(`Error processing PR ${pr.number}:`, error);
+        continue;
+      }
+    }
+
+    return oldestCommunityPRs; // No need to slice since we break when we have 5
+  } catch (error) {
+    console.error("Error fetching oldest community PRs:", error);
+    return [];
+  }
 };
 
 const main = async (): Promise<string[]> => {
@@ -171,6 +249,7 @@ const main = async (): Promise<string[]> => {
     ]);
 
     const approvedCommunityPRs = await fetchApprovedCommunityPRs(orgMembers);
+    const oldestCommunityPRs = await fetchOldestCommunityPRs(orgMembers);
 
     // Filter org member and Devin PRs (normal processing)
     const orgMemberAndDevinPRs = pullRequests.filter((pr) => {
@@ -213,7 +292,22 @@ const main = async (): Promise<string[]> => {
 
     // Combine all PRs
     const allPRs = [...orgPRsWithMetrics, ...validCommunityPRs];
-    return await printPullRequests(allPRs, orgMembers);
+    const sections = await printPullRequests(allPRs, orgMembers);
+
+    // Add oldest community PRs section
+    if (oldestCommunityPRs.length > 0) {
+      let oldestSection = `*🕰️ Oldest Community PRs* (${oldestCommunityPRs.length})\n`;
+      oldestCommunityPRs.forEach((pr) => {
+        const additionalInfo =
+          pr.isCommunityPR && pr.codeOwnerTeams
+            ? ` → ${pr.codeOwnerTeams.join("🛡️ or ")}🛡️`
+            : "";
+        oldestSection += formatPRLine(pr, additionalInfo) + "\n";
+      });
+      sections.push(oldestSection);
+    }
+
+    return sections;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return [];
