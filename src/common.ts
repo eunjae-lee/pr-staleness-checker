@@ -533,3 +533,66 @@ export const groupAndSortPRs = <T extends Record<string, PRStatus>>(
 
   return grouped;
 };
+
+// Utility function to fetch community PRs using author exclusion logic
+export const fetchCommunityPRsBySearch = async (
+  additionalSearchCriteria: string[] = []
+): Promise<GitHubPullRequest[]> => {
+  try {
+    // Fetch org members first
+    const orgMembers = await fetchOrgMembers();
+
+    // Build the search query excluding all org members and Devin
+    const excludedUsers = [...new Set([...orgMembers, DEVIN_LOGIN])];
+    const excludeAuthors = excludedUsers
+      .map((user) => `-author:${user}`)
+      .join("+");
+
+    const baseQuery = `is:pr+is:open+repo:${REPO_OWNER}/${REPO_NAME}+${excludeAuthors}`;
+    const searchQuery =
+      additionalSearchCriteria.length > 0
+        ? `${baseQuery}+${additionalSearchCriteria.join("+")}`
+        : baseQuery;
+
+    const allSearchResults: GitHubPullRequest[] = [];
+    const maxPages = 5;
+    const perPage = 100;
+
+    // Fetch up to 5 pages of results
+    for (let page = 1; page <= maxPages; page++) {
+      const url = `https://api.github.com/search/issues?q=${searchQuery}&per_page=${perPage}&page=${page}`;
+      API_CALL_COUNT++; // Increment counter
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `token ${GITHUB_TOKEN}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Error fetching community PRs page ${page}: ${response.statusText}`
+        );
+      }
+
+      const searchResults = (await response.json()) as {
+        items: GitHubPullRequest[];
+        total_count: number;
+      };
+
+      // Add results from this page
+      allSearchResults.push(...searchResults.items);
+
+      // If we got fewer results than per_page, we've reached the end
+      if (searchResults.items.length < perPage) {
+        break;
+      }
+    }
+
+    return allSearchResults;
+  } catch (error) {
+    console.error("Error fetching community PRs:", error);
+    return [];
+  }
+};

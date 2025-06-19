@@ -16,6 +16,7 @@ import {
   enhancePRWithMetrics,
   formatPRLine,
   groupAndSortPRs,
+  fetchCommunityPRsBySearch,
 } from "./common";
 
 const PR_STATUS: Record<string, PRStatus> = {
@@ -156,30 +157,7 @@ const printPullRequests = async (
 const fetchApprovedCommunityPRs = async (
   orgMembers: string[]
 ): Promise<GitHubPullRequest[]> => {
-  const query = `is:pr+is:open+repo:calcom/cal.com+review:approved`;
-  const url = `https://api.github.com/search/issues?q=${query}`;
-
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `token ${inputData.GITHUB_TOKEN}`,
-      Accept: "application/vnd.github.v3+json",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Error fetching approved PRs: ${response.statusText}`);
-  }
-
-  const data = (await response.json()) as { items: GitHubPullRequest[] };
-
-  // Filter to only community PRs (not org members or Devin)
-  const communityPRs = data.items.filter((pr) => {
-    const isOrgMember = orgMembers.includes(pr.user.login);
-    const isDevin = pr.user.login === DEVIN_LOGIN;
-    return !isOrgMember && !isDevin;
-  });
-
-  return communityPRs;
+  return await fetchCommunityPRsBySearch(["review:approved"]);
 };
 
 const main = async (): Promise<string[]> => {

@@ -16,6 +16,7 @@ import {
   enhancePRWithMetrics,
   formatPRLine,
   groupAndSortPRs,
+  fetchCommunityPRsBySearch,
 } from "./common";
 
 // Get team members from environment variables
@@ -30,54 +31,8 @@ if (TEAM_MEMBERS.length === 0) {
 // Function to fetch community PRs (excluding team members and org members)
 const fetchCommunityPRs = async (): Promise<GitHubPullRequest[]> => {
   try {
-    // Fetch org members first
-    const orgMembers = await fetchOrgMembers();
-
-    // Combine team members and org members for exclusion
-    const excludedUsers = [
-      ...new Set([...TEAM_MEMBERS, DEVIN_LOGIN, ...orgMembers]),
-    ];
-
-    // Build the search query excluding all team and org members
-    const excludeAuthors = excludedUsers
-      .map((user) => `-author:${user}`)
-      .join("+");
-    const searchQuery = `is:pr+is:open+repo:calcom/cal.com+${excludeAuthors}`;
-
-    const allSearchResults: GitHubPullRequest[] = [];
-    const maxPages = 5;
-    const perPage = 100;
-
-    // Fetch up to 5 pages of results
-    for (let page = 1; page <= maxPages; page++) {
-      const url = `https://api.github.com/search/issues?q=${searchQuery}&per_page=${perPage}&page=${page}`;
-
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `token ${inputData.GITHUB_TOKEN}`,
-          Accept: "application/vnd.github.v3+json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `Error fetching community PRs page ${page}: ${response.statusText}`
-        );
-      }
-
-      const searchResults = (await response.json()) as {
-        items: GitHubPullRequest[];
-        total_count: number;
-      };
-
-      // Add results from this page
-      allSearchResults.push(...searchResults.items);
-
-      // If we got fewer results than per_page, we've reached the end
-      if (searchResults.items.length < perPage) {
-        break;
-      }
-    }
+    // Use the common utility function to fetch community PRs
+    const allSearchResults = await fetchCommunityPRsBySearch();
 
     // Filter PRs that have code owners matching the team
     const communityPRsWithTeamCodeOwners: GitHubPullRequest[] = [];
