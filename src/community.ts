@@ -7,8 +7,6 @@ import {
   CODEOWNER_RULES,
   initializeCodeowners,
   fetchOrgMembers,
-  fetchPRFiles,
-  getCodeOwnerTeams,
   calculateMetrics,
   formatAuthorName,
   formatPRLine,
@@ -35,57 +33,15 @@ const meetsAttentionCriteria = (pr: GitHubPullRequest): boolean => {
   return (pr.staleness || 0) >= 7;
 };
 
-// Helper function to check if draft is stuck for over a week
-const isDraftStuck = (pr: GitHubPullRequest): boolean => {
-  if (!pr.draft) return false;
-  const draftAge = pr.age || 0;
-  const staleness = pr.staleness || 0;
-  return draftAge >= 7 && staleness >= 7;
-};
-
-// Helper function to check if PR has changes requested but no follow-up
-const hasChangesRequestedNoFollowUp = (pr: GitHubPullRequest): boolean => {
-  if (!pr.hasChangesRequested) return false;
-  const staleness = pr.staleness || 0;
-  // Consider it needs follow-up if there's been no activity for 3+ days after changes requested
-  return staleness >= 3;
-};
-
-// Helper function to check if PR is approved but waiting to be merged
-const isApprovedWaitingMerge = (pr: GitHubPullRequest): boolean => {
-  if (!pr.isApproved) return false;
-  const staleness = pr.staleness || 0;
-  // Consider it waiting if approved but no activity for 2+ days
-  return staleness >= 2;
-};
-
 const PR_STATUS: Record<string, PRStatus> = {
   NEEDS_ATTENTION: { priority: 0, label: "🚨 Needs Attention" },
-  DRAFT_STUCK: { priority: 1, label: "📝 Draft Stuck (1+ week)" },
-  CHANGES_REQUESTED_NO_FOLLOWUP: {
-    priority: 2,
-    label: "🔄 Changes Requested - No Follow-up",
-  },
-  APPROVED_WAITING_MERGE: {
-    priority: 3,
-    label: "✅ Approved - Waiting to Merge",
-  },
+  DRAFT_NEEDS_ATTENTION: { priority: 1, label: "📝 Draft Needs Attention" },
 };
 
 const getPRStatus = (pr: GitHubPullRequest): PRStatus => {
-  if (isDraftStuck(pr)) {
-    return PR_STATUS.DRAFT_STUCK;
+  if (pr.draft) {
+    return PR_STATUS.DRAFT_NEEDS_ATTENTION;
   }
-  if (hasChangesRequestedNoFollowUp(pr)) {
-    return PR_STATUS.CHANGES_REQUESTED_NO_FOLLOWUP;
-  }
-  if (isApprovedWaitingMerge(pr)) {
-    return PR_STATUS.APPROVED_WAITING_MERGE;
-  }
-  if (meetsAttentionCriteria(pr)) {
-    return PR_STATUS.NEEDS_ATTENTION;
-  }
-  // Default fallback
   return PR_STATUS.NEEDS_ATTENTION;
 };
 
@@ -133,26 +89,20 @@ const printCommunityPRs = async (
     }
   }
 
-  // Filter PRs that meet any of our attention criteria
-  const prsNeedingAttention = prsWithMetrics.filter(
-    (pr) =>
-      meetsAttentionCriteria(pr) ||
-      isDraftStuck(pr) ||
-      hasChangesRequestedNoFollowUp(pr) ||
-      isApprovedWaitingMerge(pr)
-  );
+  // Filter PRs that meet attention criteria
+  const prsNeedingAttention = prsWithMetrics.filter(meetsAttentionCriteria);
 
   if (prsNeedingAttention.length === 0) {
     return "No community PRs need attention at this time.";
   }
 
-  // Sort by oldest first and limit to top 10 (increased to accommodate more sections)
-  const top10OldestPRs = prsNeedingAttention
+  // Sort by oldest first and limit to top 5
+  const top5OldestPRs = prsNeedingAttention
     .sort((a, b) => (b.age || 0) - (a.age || 0)) // Sort by oldest first
-    .slice(0, 10);
+    .slice(0, 5);
 
   // Group PRs by status
-  const groupedPRs = groupAndSortPRs(top10OldestPRs, PR_STATUS, getPRStatus);
+  const groupedPRs = groupAndSortPRs(top5OldestPRs, PR_STATUS, getPRStatus);
 
   // Print each group
   Object.entries(groupedPRs).forEach(([statusLabel, prs]) => {
@@ -161,42 +111,19 @@ const printCommunityPRs = async (
     output += `*${statusLabel}* (${prs.length})\n`;
 
     prs.forEach((pr) => {
-      // Add additional info about code owners if available
-      const additionalInfo = pr.codeOwnerTeams
-        ? ` → ${pr.codeOwnerTeams.join("🛡️ or ")}🛡️`
-        : "";
-      output += formatPRLine(pr, additionalInfo) + "\n";
+      output += formatPRLine(pr) + "\n";
     });
     output += "\n";
   });
 
-  // Add summary with breakdown
+  // Add summary
   const totalCommunityPRs = prsWithMetrics.length;
   const attentionNeeded = prsNeedingAttention.length;
-  const showingCount = top10OldestPRs.length;
-
-  const draftStuckCount = prsNeedingAttention.filter(isDraftStuck).length;
-  const changesRequestedCount = prsNeedingAttention.filter(
-    hasChangesRequestedNoFollowUp
-  ).length;
-  const approvedWaitingCount = prsNeedingAttention.filter(
-    isApprovedWaitingMerge
-  ).length;
-  const generalAttentionCount = prsNeedingAttention.filter(
-    (pr) =>
-      meetsAttentionCriteria(pr) &&
-      !isDraftStuck(pr) &&
-      !hasChangesRequestedNoFollowUp(pr) &&
-      !isApprovedWaitingMerge(pr)
-  ).length;
+  const showingCount = top5OldestPRs.length;
 
   output += `📊 *Summary*\n`;
   output += `• Total community PRs analyzed: ${totalCommunityPRs}\n`;
   output += `• PRs needing attention: ${attentionNeeded}\n`;
-  output += `• Drafts stuck (1+ week): ${draftStuckCount}\n`;
-  output += `• Changes requested - no follow-up: ${changesRequestedCount}\n`;
-  output += `• Approved - waiting to merge: ${approvedWaitingCount}\n`;
-  output += `• General attention needed: ${generalAttentionCount}\n`;
   output += `• Showing top ${showingCount} oldest PRs needing attention\n`;
 
   return output;
@@ -217,39 +144,18 @@ const fetchCommunityPRsForAttention = async (): Promise<
       excludeDrafts: false, // Include drafts to check if they need attention
     });
 
-    // Process PRs to add code owner information
-    const communityPRsWithCodeOwners: GitHubPullRequest[] = [];
+    // Filter out org members and Devin, mark as community PRs
+    const filteredCommunityPRs = communityPRs
+      .filter(
+        (pr) =>
+          !orgMembers.includes(pr.user.login) && pr.user.login !== DEVIN_LOGIN
+      )
+      .map((pr) => ({
+        ...pr,
+        isCommunityPR: true,
+      }));
 
-    for (const pr of communityPRs) {
-      // Skip org members and Devin
-      if (orgMembers.includes(pr.user.login) || pr.user.login === DEVIN_LOGIN) {
-        continue;
-      }
-
-      try {
-        // Fetch files to determine code owners
-        const files = await fetchPRFiles(pr.number);
-        const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
-
-        communityPRsWithCodeOwners.push({
-          ...pr,
-          isCommunityPR: true,
-          files,
-          codeOwnerTeams,
-        });
-      } catch (error) {
-        console.warn(`Error processing community PR ${pr.number}:`, error);
-        // Still include the PR even if we can't get code owners
-        communityPRsWithCodeOwners.push({
-          ...pr,
-          isCommunityPR: true,
-          files: [],
-          codeOwnerTeams: [],
-        });
-      }
-    }
-
-    return communityPRsWithCodeOwners;
+    return filteredCommunityPRs;
   } catch (error) {
     console.error("Error fetching community PRs for attention:", error);
     return [];
@@ -258,9 +164,6 @@ const fetchCommunityPRsForAttention = async (): Promise<
 
 const main = async (): Promise<string> => {
   try {
-    // Initialize CODEOWNERS first
-    await initializeCodeowners();
-
     // Fetch community PRs that might need attention
     const communityPRs = await fetchCommunityPRsForAttention();
 

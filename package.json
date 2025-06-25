@@ -11,7 +11,6 @@
     "fix-fetch": "sed -i '' 's/fetch\\$1/fetch/g' dist/*.mjs",
     "start:team": "node dist/team.mjs",
     "start:whole": "node dist/whole.mjs",
-    "start:community": "node dist/community.mjs",
     "clean": "rm -rf dist"
   },
   "keywords": [],
