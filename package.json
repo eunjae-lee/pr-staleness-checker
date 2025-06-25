@@ -6,10 +6,12 @@
     "dev": "tsx src/team.ts",
     "dev:team": "tsx src/team.ts",
     "dev:whole": "tsx src/whole.ts",
-    "build": "npm run clean && ENTRY=team vite build && ENTRY=whole vite build && npm run fix-fetch",
+    "dev:community": "tsx src/community.ts",
+    "build": "npm run clean && ENTRY=team vite build && ENTRY=whole vite build && ENTRY=community vite build && npm run fix-fetch",
     "fix-fetch": "sed -i '' 's/fetch\\$1/fetch/g' dist/*.mjs",
     "start:team": "node dist/team.mjs",
     "start:whole": "node dist/whole.mjs",
+    "start:community": "node dist/community.mjs",
     "clean": "rm -rf dist"
   },
   "keywords": [],
