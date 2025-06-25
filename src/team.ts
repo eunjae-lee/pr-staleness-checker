@@ -32,6 +32,22 @@ if (TEAM_MEMBERS.length === 0) {
 const COMMUNITY_PR_CONCURRENCY_LIMIT = 10;
 const METRICS_CONCURRENCY_LIMIT = 15;
 
+// Helper function to check if PR has team as code owner
+const checkTeamAsCodeOwner = async (
+  pr: GitHubPullRequest
+): Promise<boolean> => {
+  try {
+    const files = await fetchPRFiles(pr.number);
+    const codeOwnerTeams = getCodeOwnerTeams(files, CODEOWNER_RULES);
+    return codeOwnerTeams.some(
+      (team) => team.toLowerCase() === TEAM_NAME.toLowerCase()
+    );
+  } catch (error) {
+    console.warn(`Error checking code ownership for PR ${pr.number}:`, error);
+    return false;
+  }
+};
+
 // Optimized function to fetch community PRs with parallel processing
 const fetchCommunityPRs = async (): Promise<GitHubPullRequest[]> => {
   try {
@@ -220,7 +236,7 @@ const main = async (): Promise<string> => {
     // Filter PRs with the team conditions:
     // 1. PRs from team members (not in draft)
     // 2. OR PRs from Devin (if enabled) where at least one assignee is a team member
-    // 3. OR PRs from org members that have requested review from the team as code owners
+    // 3. OR PRs from org members that have the team as code owners
     const filteredTeamPRs: GitHubPullRequest[] = [];
     const orgMemberTeamReviewPRs: GitHubPullRequest[] = [];
 
@@ -247,17 +263,36 @@ const main = async (): Promise<string> => {
         return;
       }
 
-      // Check if PR has requested review from the team as code owners AND author is org member
-      const hasRequestedTeamReview = pr.requested_teams?.some(
-        (team) => team.name.toLowerCase() === TEAM_NAME.toLowerCase()
-      );
-      if (hasRequestedTeamReview && orgMembers.includes(pr.user.login)) {
-        // Mark this PR as org member with team review and add to separate list
-        const prWithFlag = { ...pr, isOrgMemberWithTeamReview: true };
-        orgMemberTeamReviewPRs.push(prWithFlag);
-        return;
-      }
+      // For org members, we'll check code ownership later in the process
+      // This avoids making API calls in the forEach loop
     });
+
+    // Check org member PRs for team code ownership
+    const orgMemberPRs = teamPRs.filter(
+      (pr) =>
+        !pr.draft &&
+        orgMembers.includes(pr.user.login) &&
+        !TEAM_MEMBERS.includes(pr.user.login) &&
+        !(INCLUDE_DEVIN && pr.user.login === DEVIN_LOGIN)
+    );
+
+    // Process org member PRs in parallel to check code ownership
+    const orgMemberResults = await Promise.allSettled(
+      orgMemberPRs.map(async (pr) => {
+        const isTeamCodeOwner = await checkTeamAsCodeOwner(pr);
+        if (isTeamCodeOwner) {
+          return { ...pr, isOrgMemberWithTeamReview: true };
+        }
+        return null;
+      })
+    );
+
+    // Add org member PRs that have team as code owner
+    for (const result of orgMemberResults) {
+      if (result.status === "fulfilled" && result.value) {
+        orgMemberTeamReviewPRs.push(result.value);
+      }
+    }
 
     // Combine all PRs: team PRs, org member team review PRs, and community PRs
     const allPRs = [
