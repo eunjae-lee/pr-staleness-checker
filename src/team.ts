@@ -97,7 +97,11 @@ const PR_STATUS: Record<string, PRStatus> = {
   NEEDS_REVIEW: { priority: 0, label: "👀 Needs review" },
   CHANGES_REQUESTED: { priority: 1, label: "🔄 Changes requested" },
   APPROVED: { priority: 2, label: "✅ Approved" },
-  COMMUNITY_PR: { priority: 3, label: "🌍 Community PRs" },
+  NEEDS_REVIEW_FROM_OTHER_TEAMS: {
+    priority: 3,
+    label: "🔍 Needs review from other teams",
+  },
+  COMMUNITY_PR: { priority: 4, label: "🌍 Community PRs" },
 };
 
 const getPRStatus = (pr: GitHubPullRequest): PRStatus => {
@@ -106,6 +110,11 @@ const getPRStatus = (pr: GitHubPullRequest): PRStatus => {
 
   if (pr.hasChangesRequested) return PR_STATUS.CHANGES_REQUESTED;
   if (pr.isApproved) return PR_STATUS.APPROVED;
+
+  // Check if it's a PR from org members that requested team review
+  if (pr.isOrgMemberWithTeamReview)
+    return PR_STATUS.NEEDS_REVIEW_FROM_OTHER_TEAMS;
+
   return PR_STATUS.NEEDS_REVIEW;
 };
 
@@ -199,6 +208,9 @@ const main = async (): Promise<string> => {
     // Initialize CODEOWNERS first
     await initializeCodeowners();
 
+    // Fetch org members
+    const orgMembers = await fetchOrgMembers();
+
     // Fetch team PRs and community PRs in parallel
     const [teamPRs, communityPRs] = await Promise.all([
       fetchPullRequests(),
@@ -208,29 +220,51 @@ const main = async (): Promise<string> => {
     // Filter PRs with the team conditions:
     // 1. PRs from team members (not in draft)
     // 2. OR PRs from Devin (if enabled) where at least one assignee is a team member
-    const filteredTeamPRs = teamPRs.filter((pr) => {
+    // 3. OR PRs from org members that have requested review from the team as code owners
+    const filteredTeamPRs: GitHubPullRequest[] = [];
+    const orgMemberTeamReviewPRs: GitHubPullRequest[] = [];
+
+    teamPRs.forEach((pr) => {
       // Skip draft PRs
       if (pr.draft) {
-        return false;
+        return;
       }
 
-      // If PR is from a team member, include it
+      // If PR is from a team member, include it in team PRs
       if (TEAM_MEMBERS.includes(pr.user.login)) {
-        return true;
+        filteredTeamPRs.push(pr);
+        return;
       }
 
       // If Devin is included and PR is from Devin, check assignees
       if (INCLUDE_DEVIN && pr.user.login === DEVIN_LOGIN) {
-        return pr.assignees.some((assignee) =>
+        const hasTeamAssignee = pr.assignees.some((assignee) =>
           TEAM_MEMBERS.includes(assignee.login)
         );
+        if (hasTeamAssignee) {
+          filteredTeamPRs.push(pr);
+        }
+        return;
       }
 
-      return false;
+      // Check if PR has requested review from the team as code owners AND author is org member
+      const hasRequestedTeamReview = pr.requested_teams?.some(
+        (team) => team.name.toLowerCase() === TEAM_NAME.toLowerCase()
+      );
+      if (hasRequestedTeamReview && orgMembers.includes(pr.user.login)) {
+        // Mark this PR as org member with team review and add to separate list
+        const prWithFlag = { ...pr, isOrgMemberWithTeamReview: true };
+        orgMemberTeamReviewPRs.push(prWithFlag);
+        return;
+      }
     });
 
-    // Combine both team PRs and community PRs
-    const allPRs = [...filteredTeamPRs, ...communityPRs];
+    // Combine all PRs: team PRs, org member team review PRs, and community PRs
+    const allPRs = [
+      ...filteredTeamPRs,
+      ...orgMemberTeamReviewPRs,
+      ...communityPRs,
+    ];
 
     const output = await printPullRequests(allPRs);
 

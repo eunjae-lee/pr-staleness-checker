@@ -50,6 +50,7 @@ export interface GitHubPullRequest {
   labels: GitHubLabel[];
   requested_teams?: GitHubTeam[];
   isCommunityPR?: boolean;
+  isOrgMemberWithTeamReview?: boolean;
   files?: GitHubFile[];
   codeOwnerTeams?: string[];
   age?: number;
