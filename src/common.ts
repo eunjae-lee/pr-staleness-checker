@@ -418,10 +418,6 @@ const getBusinessDays = (startDate: Date, endDate: Date): number => {
   const start = new Date(startDate);
   const end = new Date(endDate);
 
-  // Set both dates to midnight to ensure consistent calculation
-  start.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
-
   let businessDays = 0;
   const current = new Date(start);
 
